@@ -6,15 +6,11 @@
 //
 
 import SwiftUI
-
 @main
-struct llmChatApp: App {
-    let persistenceController = PersistenceController.shared
-
+struct LLMChatApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
+            ChatView()
         }
     }
 }
