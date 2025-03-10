@@ -33,39 +33,94 @@ struct ChatView: View {
     @State private var streamingMessage: String = ""
     @State private var currentDelta: String = ""
     @State private var currentService: LLMService?  // Add state for current service
+    @State private var scrollToBottom: Bool = false
+    @State private var currentConversationID: UUID? = nil  // Track current conversation ID
+    @State private var isContextSummarized: Bool = false  // Track if context is summarized
+    @State private var contextUsagePercent: Double = 0  // Track context window usage
     let models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"]
     let languages = ["English", "Spanish", "French", "German", "Chinese", "Japanese"]
     
     var body: some View {
         NavigationView {
             VStack {
-                List {
-                    ForEach(messages) { message in
-                        MessageRow(message: message)
+                ScrollViewReader { scrollView in
+                    List {
+                        ForEach(messages) { message in
+                            MessageRow(message: message)
+                                .id(message.id) // Use message ID for scrolling
+                        }
+                        
+                        // Show streaming message while it's in progress
+                        if isStreaming {
+                            Text("Streaming: \(streamingMessage)")
+                                .padding()
+                                .id("streamingMessage") // ID for scrolling to streaming content
+                        }
+                        
+                        // Invisible spacer view at the bottom for scrolling
+                        Color.clear.frame(height: 1).id("bottomID")
                     }
-                    
-                    // Show streaming message while it's in progress
-                    if isStreaming {
-                        Text("Streaming: \(streamingMessage)")
-                            .padding()
+                    .onChange(of: messages.count) { _ in
+                        // Scroll to bottom when messages change
+                        withAnimation {
+                            scrollView.scrollTo("bottomID", anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: streamingMessage) { _ in
+                        // Scroll to bottom when streaming message updates
+                        withAnimation {
+                            scrollView.scrollTo("bottomID", anchor: .bottom)
+                        }
                     }
                 }
                 inputArea
                 
-                // Debug info view
-                VStack(alignment: .leading) {
-                    Text("Debug Info:")
-                        .font(.caption)
-                    Text("isStreaming: \(isStreaming ? "true" : "false")")
-                        .font(.caption)
-                    Text("streamingMessage length: \(streamingMessage.count)")
-                        .font(.caption)
-                    Text("currentDelta length: \(currentDelta.count)")
-                        .font(.caption)
-                    Text("messages count: \(messages.count)")
-                        .font(.caption)
+                // Context window usage indicator
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        // Model indicator
+                        HStack(spacing: 4) {
+                            Image(systemName: "cpu")
+                                .font(.caption)
+                            Text(storage.preferredModel)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                        
+                        Spacer()
+                        
+                        Text("Context: \(Int(contextUsagePercent))%")
+                            .font(.caption)
+                    }
+                    
+                    // Progress bar for context window usage
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Rectangle()
+                                .frame(width: geometry.size.width, height: 4)
+                                .opacity(0.3)
+                                .foregroundColor(Color.gray)
+                            
+                            Rectangle()
+                                .frame(width: min(CGFloat(contextUsagePercent) * geometry.size.width / 100, geometry.size.width), height: 4)
+                                .foregroundColor(contextUsagePercent < 70 ? Color.green : (contextUsagePercent < 90 ? Color.yellow : Color.red))
+                        }
+                        .cornerRadius(2)
+                    }
+                    .frame(height: 4)
+                    
+                    if isContextSummarized {
+                        Text("Context summarized to fit model limits")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.vertical, 8)
                 .background(Color(.systemGray6))
             }
             .navigationTitle("Chat")
@@ -75,9 +130,24 @@ struct ChatView: View {
                         Image(systemName: "gear")
                     }
                 }
+                
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink(destination: ConversationHistoryView(onSelect: loadConversation)) {
-                        Image(systemName: "clock")
+                    HStack(spacing: 16) {
+                        // Clear conversation button
+                        Button(action: clearConversation) {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                        
+                        // New conversation button
+                        Button(action: newConversation) {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        
+                        // History button
+                        NavigationLink(destination: ConversationHistoryView(onSelect: loadConversation)) {
+                            Image(systemName: "clock")
+                        }
                     }
                 }
             }
@@ -86,9 +156,13 @@ struct ChatView: View {
     // Update the inputArea to make the stop button more visible
 var inputArea: some View {
     HStack {
-        TextField("Type a message...", text: $inputText)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .disabled(isStreaming)
+        TextField("Type a message...", text: $inputText, onCommit: {
+            if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
+                sendMessage()
+            }
+        })
+        .textFieldStyle(RoundedBorderTextFieldStyle())
+        .disabled(isStreaming)
         
         Picker("Language", selection: $selectedLanguage) {
             ForEach(languages, id: \.self) { language in
@@ -141,7 +215,10 @@ private func sendMessage() {
         }
     }
     
-    // Sending message using LLMService
+    // Calculate context usage before sending
+    updateContextUsage()
+    
+    // Sending message using LLMService with conversation history
     currentService = LLMService.sendStreamingMessage(
         message: messageSent,
         prompt: storage.prompt,
@@ -150,7 +227,8 @@ private func sendMessage() {
         endpoint: storage.apiEndpoint,
         preferredLanguage: selectedLanguage,
         useChatEndpoint: storage.useChatEndpoint,
-        onUpdate: { chunk, isFinal in
+        conversationHistory: messages, // Pass the full conversation history
+        onUpdate: { [self] chunk, isFinal in
             print("Raw chunk: \(chunk)")
             
             DispatchQueue.main.async {
@@ -169,12 +247,21 @@ private func sendMessage() {
                     streamingMessage = ""
                     currentDelta = ""
                     
-                    CoreDataManager.shared.saveConversation(
+                    // Save and update the current conversation ID if needed
+                    let savedID = CoreDataManager.shared.saveConversation(
                         model: storage.preferredModel,
                         prompt: storage.prompt,
                         language: selectedLanguage,
-                        messages: messages
+                        messages: messages,
+                        apiToken: storage.apiToken,
+                        apiEndpoint: storage.apiEndpoint,
+                        conversationID: currentConversationID
                     )
+                    
+                    // Update the conversation ID for future saves
+                    if currentConversationID == nil {
+                        currentConversationID = savedID
+                    }
                 } else {
                     // Strip "data: " prefix and parse JSON
                     if chunk.hasPrefix("data: ") {
@@ -204,12 +291,20 @@ private func sendMessage() {
             messages.append(ChatMessage(text: currentDelta + "\n\n[Response interrupted]", isUser: false))
             
             // Save the conversation even if interrupted
-            CoreDataManager.shared.saveConversation(
+            let savedID = CoreDataManager.shared.saveConversation(
                 model: storage.preferredModel,
                 prompt: storage.prompt,
                 language: selectedLanguage,
-                messages: messages
+                messages: messages,
+                apiToken: storage.apiToken,
+                apiEndpoint: storage.apiEndpoint,
+                conversationID: currentConversationID
             )
+            
+            // Update the conversation ID for future saves
+            if currentConversationID == nil {
+                currentConversationID = savedID
+            }
         }
         
         streamingMessage = ""
@@ -224,7 +319,66 @@ private func sendMessage() {
             selectedModel = conversation.model ?? "gpt-4"
             storage.prompt = conversation.prompt ?? "You are a helpful assistant."
             selectedLanguage = conversation.language ?? "English"
+            currentConversationID = conversation.id  // Set current conversation ID when loading
         }
+    }
+    
+    // Clear the current conversation
+    private func clearConversation() {
+        messages = []
+        streamingMessage = ""
+        currentDelta = ""
+        isStreaming = false
+        currentConversationID = nil  // Reset conversation ID when clearing
+        isContextSummarized = false
+        contextUsagePercent = 0
+        if let currentService = currentService {
+            currentService.cancelStreaming()
+        }
+    }
+    
+    // Calculate and update context window usage indicators
+    private func updateContextUsage() {
+        // Get max tokens for the current model
+        let maxTokens = LLMService.getMaxTokensForModel(storage.preferredModel)
+        
+        // Calculate total tokens in the conversation
+        var totalTokens = LLMService.estimateTokens(in: storage.prompt) // System prompt
+        
+        for message in messages {
+            totalTokens += LLMService.estimateTokens(in: message.text)
+        }
+        
+        // Calculate percentage of context window used
+        contextUsagePercent = min(Double(totalTokens) / Double(maxTokens) * 100, 100)
+        
+        // Check if we need to summarize (over 75% of context window)
+        let tokenBuffer = min(1000, maxTokens / 4) // Reserve 25% or 1000 tokens, whichever is smaller
+        isContextSummarized = totalTokens > maxTokens - tokenBuffer
+        
+        print("Context usage: \(Int(contextUsagePercent))% (\(totalTokens)/\(maxTokens) tokens)")
+    }
+    
+    // Start a new conversation (clear and save current one if needed)
+    private func newConversation() {
+        // Save current conversation if it has content
+        if !messages.isEmpty {
+            CoreDataManager.shared.saveConversation(
+                model: storage.preferredModel,
+                prompt: storage.prompt,
+                language: selectedLanguage,
+                messages: messages,
+                apiToken: storage.apiToken,
+                apiEndpoint: storage.apiEndpoint,
+                conversationID: currentConversationID
+            )
+        }
+        
+        // Reset the conversation ID for a truly new conversation
+        currentConversationID = nil
+        
+        // Clear everything for a fresh start
+        clearConversation()
     }
 }
 

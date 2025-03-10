@@ -11,6 +11,32 @@ class LLMService: NSObject, URLSessionDataDelegate {
         super.init()
     }
 
+    // Constants for context management
+    static let MAX_TOKENS = 4096 // Default max tokens, will be overridden based on model
+    static let TOKENS_PER_MESSAGE = 4 // Approx overhead per message
+    static let TOKENS_PER_CHAR = 0.25 // Rough approximation for token estimation
+    
+    // Get max tokens for a given model
+    static func getMaxTokensForModel(_ model: String) -> Int {
+        switch model.lowercased() {
+        case _ where model.contains("gpt-4-turbo"):
+            return 128000
+        case _ where model.contains("gpt-4"):
+            return 8192
+        case _ where model.contains("gpt-3.5-turbo-16k"):
+            return 16384
+        case _ where model.contains("gpt-3.5-turbo"):
+            return 4096
+        default:
+            return 4096 // Default fallback
+        }
+    }
+    
+    // Estimate tokens in a string
+    static func estimateTokens(in text: String) -> Int {
+        return Int(Double(text.count) * TOKENS_PER_CHAR) + TOKENS_PER_MESSAGE
+    }
+    
     static func sendStreamingMessage(
         message: String,
         prompt: String,
@@ -19,11 +45,20 @@ class LLMService: NSObject, URLSessionDataDelegate {
         endpoint: String,
         preferredLanguage: String,
         useChatEndpoint: Bool,
+        conversationHistory: [ChatMessage] = [],
         onUpdate: @escaping (String, Bool) -> Void
     ) -> LLMService {
         let service = LLMService(useChatEndpoint: useChatEndpoint)
         service.onUpdate = onUpdate
-        service.startStreaming(message: message, prompt: prompt, model: model, apiToken: apiToken, endpoint: endpoint, preferredLanguage: preferredLanguage)
+        service.startStreaming(
+            message: message,
+            prompt: prompt,
+            model: model,
+            apiToken: apiToken,
+            endpoint: endpoint,
+            preferredLanguage: preferredLanguage,
+            conversationHistory: conversationHistory
+        )
         return service
     }
     
@@ -37,44 +72,80 @@ class LLMService: NSObject, URLSessionDataDelegate {
         model: String,
         apiToken: String,
         endpoint: String,
-        preferredLanguage: String
+        preferredLanguage: String,
+        conversationHistory: [ChatMessage] = []
     ) {
-        let endpointPath = useChatEndpoint ? "/v1/chat/completions" : "/v1/completions"
+        // Check if the endpoint already has the necessary path components
+        var finalEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Ensure endpoint has a valid scheme
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !baseEndpoint.hasPrefix("http://") && !baseEndpoint.hasPrefix("https://") {
-            baseEndpoint = "https://" + baseEndpoint
+        if !finalEndpoint.hasPrefix("http://") && !finalEndpoint.hasPrefix("https://") {
+            finalEndpoint = "https://" + finalEndpoint
         }
-        // Remove trailing slash if present
-        baseEndpoint = baseEndpoint.hasSuffix("/") ? String(baseEndpoint.dropLast()) : baseEndpoint
         
-        guard let url = URL(string: baseEndpoint + endpointPath) else {
+        // Check if the endpoint already contains the path
+        let chatPath = "/v1/chat/completions"
+        let completionsPath = "/v1/completions"
+        
+        if (useChatEndpoint && finalEndpoint.contains(chatPath)) || 
+           (!useChatEndpoint && finalEndpoint.contains(completionsPath)) {
+            // The endpoint already has the correct path, use it as is
+        } else {
+            // Remove trailing slash if present
+            finalEndpoint = finalEndpoint.hasSuffix("/") ? String(finalEndpoint.dropLast()) : finalEndpoint
+            
+            // Add the appropriate path
+            let endpointPath = useChatEndpoint ? chatPath : completionsPath
+            finalEndpoint += endpointPath
+        }
+        
+        guard let url = URL(string: finalEndpoint) else {
             DispatchQueue.main.async {
-                self.onUpdate?("Error: Invalid API endpoint: \(baseEndpoint + endpointPath)", true)
+                self.onUpdate?("Error: Invalid API endpoint: \(finalEndpoint)", true)
             }
             return
         }
         
-        // guard !apiToken.isEmpty else {
-        //     DispatchQueue.main.async {
-        //         self.onUpdate?("Error: Missing API token", true)
-        //     }
-        //     return
-        // }
         
-        let systemPrompt = preferredLanguage == "English" ? "You are a helpful assistant." :
-        "You are a helpful assistant. Respond in \(preferredLanguage) unless the user specifies otherwise."
+        // Use the provided prompt if available, otherwise use a default system prompt
+        let systemPrompt = !prompt.isEmpty ? prompt : 
+            (preferredLanguage == "English" ? "You are a helpful assistant." :
+            "You are a helpful assistant. Respond in \(preferredLanguage) unless the user specifies otherwise.")
+        
+        // Get max tokens for the model
+        let maxTokens = LLMService.getMaxTokensForModel(model)
         
         // Prepare request body based on endpoint type
         let json: [String: Any]
         if useChatEndpoint {
+            // Process conversation history with context window management
+            var messages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+            
+            // Add conversation history if available
+            if !conversationHistory.isEmpty {
+                let processedHistory = processConversationHistory(conversationHistory, maxTokens: maxTokens, systemPrompt: systemPrompt)
+                
+                // Add processed history messages
+                for historyMessage in processedHistory {
+                    if historyMessage.isUser {
+                        messages.append(["role": "user", "content": historyMessage.text])
+                    } else {
+                        messages.append(["role": "assistant", "content": historyMessage.text])
+                    }
+                }
+                
+                // Add the current message if it's not already in the history
+                if !processedHistory.contains(where: { $0.isUser && $0.text == message }) {
+                    messages.append(["role": "user", "content": message])
+                }
+            } else {
+                // Just add the current message if no history
+                messages.append(["role": "user", "content": message])
+            }
+            
             json = [
                 "model": model,
-                "messages": [
-                    ["role": "system", "content": systemPrompt],
-                    ["role": "user", "content": message]
-                ],
+                "messages": messages,
                 "stream": true
             ]
         } else {
@@ -124,5 +195,165 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 self.onUpdate?("", true)
             }
         }
+    }
+    
+    // MARK: - Context Window Management
+    
+    // Process conversation history to fit within context window
+    private func processConversationHistory(_ history: [ChatMessage], maxTokens: Int, systemPrompt: String) -> [ChatMessage] {
+        // If history is small enough, return it as is
+        let systemTokens = LLMService.estimateTokens(in: systemPrompt)
+        var totalTokens = systemTokens
+        
+        for message in history {
+            totalTokens += LLMService.estimateTokens(in: message.text)
+        }
+        
+        // If we're under the limit (with some buffer for the response), return the full history
+        let tokenBuffer = min(1000, maxTokens / 4) // Reserve 25% or 1000 tokens, whichever is smaller
+        if totalTokens <= maxTokens - tokenBuffer {
+            return history
+        }
+        
+        // We need to compress the history
+        var processedHistory: [ChatMessage] = []
+        
+        // Always keep the first few messages for context
+        let keepAtStart = min(3, history.count)
+        processedHistory.append(contentsOf: history.prefix(keepAtStart))
+        
+        // Always keep the most recent messages
+        let keepAtEnd = min(5, history.count - keepAtStart)
+        if keepAtEnd > 0 {
+            let endMessages = history.suffix(keepAtEnd)
+            
+            // If we still need to compress, generate a summary of the middle part
+            if history.count > keepAtStart + keepAtEnd {
+                let middleStart = keepAtStart
+                let middleEnd = history.count - keepAtEnd
+                
+                if middleEnd > middleStart {
+                    let middleMessages = Array(history[middleStart..<middleEnd])
+                    let summary = createConversationSummary(middleMessages)
+                    processedHistory.append(ChatMessage(text: "[Summary of previous conversation: \(summary)]", isUser: false))
+                }
+            }
+            
+            // Add the recent messages
+            processedHistory.append(contentsOf: endMessages)
+        }
+        
+        return processedHistory
+    }
+    
+    // Create a summary of conversation messages
+    private func createConversationSummary(_ messages: [ChatMessage]) -> String {
+        var summary = ""
+        
+        // Simple approach: extract key points from user messages
+        for message in messages where message.isUser {
+            let truncated = String(message.text.prefix(100))
+            summary += "\(truncated)\(message.text.count > 100 ? "..." : "")\n"
+        }
+        
+        return summary.isEmpty ? "Previous conversation" : summary
+    }
+    
+    // MARK: - Conversation Summarization
+    
+    // Generate a summary for a conversation using LLM
+    static func generateConversationSummary(
+        messages: [ChatMessage],
+        apiToken: String,
+        endpoint: String,
+        model: String,
+        completion: @escaping (String) -> Void
+    ) {
+        // Create a conversation transcript for the LLM to summarize
+        var transcript = ""
+        for (index, message) in messages.enumerated() {
+            let role = message.isUser ? "User" : "Assistant"
+            transcript += "\(role): \(message.text)\n\n"
+            
+            // If we have just the first exchange, that's enough for a summary
+            if index >= 1 && messages.count > 3 {
+                break
+            }
+        }
+        
+        // Fallback to first user message if we can't connect to LLM
+        guard !apiToken.isEmpty, !endpoint.isEmpty else {
+            if let firstUserMessage = messages.first(where: { $0.isUser })?.text {
+                let truncated = String(firstUserMessage.prefix(50)) + (firstUserMessage.count > 50 ? "..." : "")
+                completion(truncated)
+            } else {
+                completion("New Conversation")
+            }
+            return
+        }
+        
+        // Ensure endpoint has a valid scheme
+        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !baseEndpoint.hasPrefix("http://") && !baseEndpoint.hasPrefix("https://") {
+            baseEndpoint = "https://" + baseEndpoint
+        }
+        // Remove trailing slash if present
+        baseEndpoint = baseEndpoint.hasSuffix("/") ? String(baseEndpoint.dropLast()) : baseEndpoint
+        
+        guard let url = URL(string: baseEndpoint + "/v1/chat/completions") else {
+            completion("New Conversation")
+            return
+        }
+        
+        let json: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": "You are a helpful assistant that generates short, concise titles (5 words max) for chat conversations. The title should capture the main topic or question."],
+                ["role": "user", "content": "Please create a short, concise title (5 words max) for this conversation:\n\n\(transcript)"]
+            ],
+            "max_tokens": 20
+        ]
+        
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: json) else {
+            completion("New Conversation")
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = jsonData
+        
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data = data, error == nil,
+                  let jsonResponse = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = jsonResponse["choices"] as? [[String: Any]],
+                  let firstChoice = choices.first,
+                  let message = firstChoice["message"] as? [String: Any],
+                  let content = message["content"] as? String else {
+                
+                // Fallback to first message if API call fails
+                DispatchQueue.main.async {
+                    if let firstUserMessage = messages.first(where: { $0.isUser })?.text {
+                        let truncated = String(firstUserMessage.prefix(50)) + (firstUserMessage.count > 50 ? "..." : "")
+                        completion(truncated)
+                    } else {
+                        completion("New Conversation")
+                    }
+                }
+                return
+            }
+            
+            DispatchQueue.main.async {
+                // Clean up the title (remove quotes if present)
+                let cleanTitle = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "^\"", with: "", options: .regularExpression)
+                    .replacingOccurrences(of: "\"$", with: "", options: .regularExpression)
+                
+                completion(cleanTitle)
+            }
+        }
+        task.resume()
     }
 }

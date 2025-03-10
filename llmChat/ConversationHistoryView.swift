@@ -11,22 +11,32 @@ import SwiftUI
 struct ConversationHistoryView: View {
     let onSelect: (Conversation) -> Void
     @State private var conversations: [Conversation] = []
+    @Environment(\.presentationMode) var presentationMode
 
     var body: some View {
         List {
             ForEach(conversations, id: \.id) { conversation in
                 VStack(alignment: .leading) {
-                    Text("Model: \(conversation.model ?? "Unknown")")
+                    // Display the conversation title as the main headline
+                    Text(getConversationTitle(conversation))
                         .font(.headline)
-                    Text("Prompt: \(conversation.prompt ?? "No prompt")")
+                        .foregroundColor(.primary)
+                    
+                    // Display model as secondary information
+                    Text("Model: \(conversation.model ?? "Unknown")")
                         .font(.subheadline)
-                        .lineLimit(1)
+                        .foregroundColor(.secondary)
+                    
+                    // Display date at the bottom
                     Text(conversation.timestamp?.formatted() ?? "Unknown date")
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
+                .padding(.vertical, 4)
                 .onTapGesture {
                     onSelect(conversation)
+                    // Dismiss this view to return to the chat view
+                    presentationMode.wrappedValue.dismiss()
                 }
             }
             .onDelete(perform: deleteConversation)
@@ -41,8 +51,32 @@ struct ConversationHistoryView: View {
 
     private func deleteConversation(at offsets: IndexSet) {
         offsets.forEach { index in
-            CoreDataManager.shared.deleteConversation(conversations[index])
+            let conversation = conversations[index]
+            // Also remove the title from UserDefaults when deleting a conversation
+            if let id = conversation.id?.uuidString {
+                UserDefaults.standard.removeObject(forKey: "conversation_title_\(id)")
+            }
+            CoreDataManager.shared.deleteConversation(conversation)
         }
         loadConversations()
+    }
+    
+    // Helper function to get conversation title from UserDefaults or generate a default one
+    private func getConversationTitle(_ conversation: Conversation) -> String {
+        if let id = conversation.id?.uuidString,
+           let title = UserDefaults.standard.string(forKey: "conversation_title_\(id)") {
+            return title
+        }
+        
+        // Fallback: Try to extract title from the first message
+        if let messageData = conversation.messages,
+           let messages = try? JSONDecoder().decode([ChatMessage].self, from: messageData),
+           let firstUserMessage = messages.first(where: { $0.isUser })?.text {
+            let truncatedTitle = String(firstUserMessage.prefix(50)) + (firstUserMessage.count > 50 ? "..." : "")
+            return truncatedTitle
+        }
+        
+        // Default title if nothing else works
+        return "Conversation \(conversation.timestamp?.formatted(date: .abbreviated, time: .shortened) ?? "")" 
     }
 }
