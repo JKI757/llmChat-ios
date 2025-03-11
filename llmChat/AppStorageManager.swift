@@ -28,18 +28,26 @@ struct SavedEndpoint: Identifiable, Codable, Equatable {
     var isChatEndpoint: Bool
     var requiresAuth: Bool
     var defaultModel: String
+    var temperature: Double
     
-    init(id: UUID = UUID(), name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool = true, defaultModel: String = "gpt-3.5-turbo") {
+    init(id: UUID = UUID(), name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool = true, defaultModel: String = "gpt-3.5-turbo", temperature: Double = 1.0) {
         self.id = id
         self.name = name
         self.url = url
         self.isChatEndpoint = isChatEndpoint
         self.requiresAuth = requiresAuth
         self.defaultModel = defaultModel
+        self.temperature = temperature
     }
 }
 
 class AppStorageManager: ObservableObject {
+    // Add a method to save endpoints to UserDefaults
+    private func saveEndpoints() {
+        if let encodedData = try? JSONEncoder().encode(savedEndpoints) {
+            UserDefaults.standard.set(encodedData, forKey: "savedEndpoints")
+        }
+    }
     @Published var apiToken: String {
         didSet { UserDefaults.standard.set(apiToken, forKey: "apiToken") }
     }
@@ -86,11 +94,16 @@ class AppStorageManager: ObservableObject {
     @Published var useChatEndpoint: Bool {
         didSet { UserDefaults.standard.set(useChatEndpoint, forKey: "useChatEndpoint") }
     }
+    
+    @Published var temperature: Double {
+        didSet { UserDefaults.standard.set(temperature, forKey: "temperature") }
+    }
 
     init() {
         self.apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
         self.apiEndpoint = UserDefaults.standard.string(forKey: "apiEndpoint") ?? ""
         self.prompt = UserDefaults.standard.string(forKey: "prompt") ?? "You are a helpful AI assistant."
+        self.temperature = UserDefaults.standard.double(forKey: "temperature") != 0 ? UserDefaults.standard.double(forKey: "temperature") : 1.0
         self.preferredLanguage = UserDefaults.standard.string(forKey: "preferredLanguage") ?? "English"
         self.preferredModel = UserDefaults.standard.string(forKey: "preferredModel") ?? "gpt-3.5-turbo"
         self.useChatEndpoint = UserDefaults.standard.bool(forKey: "useChatEndpoint")
@@ -165,20 +178,29 @@ class AppStorageManager: ObservableObject {
     // MARK: - Endpoint Management
     
     @discardableResult
-    func addEndpoint(name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String) -> UUID {
-        let newEndpoint = SavedEndpoint(name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel)
+    func addEndpoint(name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String, temperature: Double = 1.0) -> UUID {
+        let newEndpoint = SavedEndpoint(name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel, temperature: temperature)
         savedEndpoints.append(newEndpoint)
+        saveEndpoints()
+        // Notify observers that endpoints have changed
+        objectWillChange.send()
         return newEndpoint.id
     }
     
-    func updateEndpoint(id: UUID, name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String) {
+    func updateEndpoint(id: UUID, name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String, temperature: Double) {
         if let index = savedEndpoints.firstIndex(where: { $0.id == id }) {
-            savedEndpoints[index] = SavedEndpoint(id: id, name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel)
+            savedEndpoints[index] = SavedEndpoint(id: id, name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel, temperature: temperature)
+            saveEndpoints()
+            // Notify observers that endpoints have changed
+            objectWillChange.send()
         }
     }
     
     func deleteEndpoint(at indexSet: IndexSet) {
         savedEndpoints.remove(atOffsets: indexSet)
+        saveEndpoints()
+        // Notify observers that endpoints have changed
+        objectWillChange.send()
     }
     
     func selectEndpoint(id: UUID) {
@@ -187,11 +209,13 @@ class AppStorageManager: ObservableObject {
             apiEndpoint = selectedEndpoint.url
             useChatEndpoint = selectedEndpoint.isChatEndpoint
             preferredModel = selectedEndpoint.defaultModel
+            temperature = selectedEndpoint.temperature
             
             // Ensure the changes are immediately applied
             UserDefaults.standard.set(apiEndpoint, forKey: "apiEndpoint")
             UserDefaults.standard.set(useChatEndpoint, forKey: "useChatEndpoint")
             UserDefaults.standard.set(preferredModel, forKey: "preferredModel")
+            UserDefaults.standard.set(temperature, forKey: "temperature")
             
             // Notify observers that the endpoint has changed
             objectWillChange.send()
@@ -201,10 +225,16 @@ class AppStorageManager: ObservableObject {
     func setDefaultEndpoint(id: UUID) {
         if savedEndpoints.contains(where: { $0.id == id }) {
             defaultEndpointID = id
+            UserDefaults.standard.set(id.uuidString, forKey: "defaultEndpointID")
+            // Notify observers that the default endpoint has changed
+            objectWillChange.send()
         }
     }
     
     func moveEndpoint(from source: IndexSet, to destination: Int) {
         savedEndpoints.move(fromOffsets: source, toOffset: destination)
+        saveEndpoints()
+        // Notify observers that endpoints have changed
+        objectWillChange.send()
     }
 }

@@ -45,6 +45,7 @@ class LLMService: NSObject, URLSessionDataDelegate {
         endpoint: String,
         preferredLanguage: String,
         useChatEndpoint: Bool,
+        temperature: Double = 1.0,
         conversationHistory: [ChatMessage] = [],
         onUpdate: @escaping (String, Bool) -> Void
     ) -> LLMService {
@@ -57,6 +58,7 @@ class LLMService: NSObject, URLSessionDataDelegate {
             apiToken: apiToken,
             endpoint: endpoint,
             preferredLanguage: preferredLanguage,
+            temperature: temperature,
             conversationHistory: conversationHistory
         )
         return service
@@ -73,6 +75,7 @@ class LLMService: NSObject, URLSessionDataDelegate {
         apiToken: String,
         endpoint: String,
         preferredLanguage: String,
+        temperature: Double = 1.0,
         conversationHistory: [ChatMessage] = []
     ) {
         // Check if the endpoint already has the necessary path components
@@ -80,6 +83,7 @@ class LLMService: NSObject, URLSessionDataDelegate {
         
         // Ensure endpoint has a valid scheme
         if !finalEndpoint.hasPrefix("http://") && !finalEndpoint.hasPrefix("https://") {
+            // Default to https, but allow http if specified
             finalEndpoint = "https://" + finalEndpoint
         }
         
@@ -106,6 +110,12 @@ class LLMService: NSObject, URLSessionDataDelegate {
             return
         }
         
+        // Create a custom URL session configuration that allows HTTP connections
+        let sessionConfig = URLSessionConfiguration.default
+        sessionConfig.waitsForConnectivity = true
+        sessionConfig.timeoutIntervalForRequest = 60.0
+        sessionConfig.timeoutIntervalForResource = 300.0
+        
         
         // Use the provided prompt if available, otherwise use a default system prompt
         let systemPrompt = !prompt.isEmpty ? prompt : 
@@ -127,15 +137,27 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 
                 // Add processed history messages
                 for historyMessage in processedHistory {
-                    if historyMessage.isUser {
-                        messages.append(["role": "user", "content": historyMessage.text])
-                    } else {
-                        messages.append(["role": "assistant", "content": historyMessage.text])
+                    // Only include text messages, skip image messages
+                    if case .text(let textContent) = historyMessage.content {
+                        if historyMessage.isUser {
+                            messages.append(["role": "user", "content": textContent])
+                        } else {
+                            messages.append(["role": "assistant", "content": textContent])
+                        }
                     }
+                    // Images could be handled here if the API supports it
                 }
                 
                 // Add the current message if it's not already in the history
-                if !processedHistory.contains(where: { $0.isUser && $0.text == message }) {
+                // Check if the message is already in the processed history
+                let messageExists = processedHistory.contains { historyMessage in
+                    if historyMessage.isUser, case .text(let text) = historyMessage.content {
+                        return text == message // comparing the text content with the current message string
+                    }
+                    return false
+                }
+                
+                if !messageExists {
                     messages.append(["role": "user", "content": message])
                 }
             } else {
@@ -146,12 +168,14 @@ class LLMService: NSObject, URLSessionDataDelegate {
             json = [
                 "model": model,
                 "messages": messages,
+                "temperature": temperature,
                 "stream": true
             ]
         } else {
             json = [
                 "model": model,
                 "prompt": prompt,
+                "temperature": temperature,
                 "stream": true
             ]
         }
@@ -165,11 +189,25 @@ class LLMService: NSObject, URLSessionDataDelegate {
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        // Set a longer timeout (30 seconds) to accommodate model loading time
+        request.timeoutInterval = 30.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = jsonData
 
-        let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        // Create a session with a longer timeout configuration that allows HTTP connections
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30.0
+        config.timeoutIntervalForResource = 60.0
+        
+        // Configure session to allow HTTP connections
+        if #available(iOS 9.0, *) {
+            // This disables ATS for this session only
+            config.waitsForConnectivity = true
+        }
+        
+        print("Connecting to endpoint: \(url.absoluteString)")
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         currentTask = session.dataTask(with: request)
         currentTask?.resume()
     }
@@ -252,8 +290,12 @@ class LLMService: NSObject, URLSessionDataDelegate {
         
         // Simple approach: extract key points from user messages
         for message in messages where message.isUser {
-            let truncated = String(message.text.prefix(100))
-            summary += "\(truncated)\(message.text.count > 100 ? "..." : "")\n"
+            if case .text(let textContent) = message.content {
+                let truncated = String(textContent.prefix(100))
+                summary += "\(truncated)\(textContent.count > 100 ? "..." : "")\n"
+            } else if case .image(_) = message.content {
+                summary += "[Image]\n"
+            }
         }
         
         return summary.isEmpty ? "Previous conversation" : summary
@@ -273,7 +315,13 @@ class LLMService: NSObject, URLSessionDataDelegate {
         var transcript = ""
         for (index, message) in messages.enumerated() {
             let role = message.isUser ? "User" : "Assistant"
-            transcript += "\(role): \(message.text)\n\n"
+            
+            switch message.content {
+            case .text(let textContent):
+                transcript += "\(role): \(textContent)\n\n"
+            case .image(_):
+                transcript += "\(role): [Image]\n\n"
+            }
             
             // If we have just the first exchange, that's enough for a summary
             if index >= 1 && messages.count > 3 {
@@ -283,9 +331,15 @@ class LLMService: NSObject, URLSessionDataDelegate {
         
         // Fallback to first user message if we can't connect to LLM
         guard !apiToken.isEmpty, !endpoint.isEmpty else {
-            if let firstUserMessage = messages.first(where: { $0.isUser })?.text {
-                let truncated = String(firstUserMessage.prefix(50)) + (firstUserMessage.count > 50 ? "..." : "")
-                completion(truncated)
+            if let firstUserMessage = messages.first(where: { $0.isUser }) {
+                if case .text(let textContent) = firstUserMessage.content {
+                    let truncated = String(textContent.prefix(50)) + (textContent.count > 50 ? "..." : "")
+                    completion(truncated)
+                } else if case .image(_) = firstUserMessage.content {
+                    completion("Image Conversation")
+                } else {
+                    completion("New Conversation")
+                }
             } else {
                 completion("New Conversation")
             }

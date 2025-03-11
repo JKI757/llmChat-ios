@@ -1,6 +1,7 @@
 import CoreData
 import SwiftUI
 import MarkdownUI
+import PhotosUI
 
 // Add structures for handling streaming response
 struct StreamResponse: Codable {
@@ -23,11 +24,11 @@ struct StreamResponse: Codable {
 }
 
 struct ChatView: View {
-    @StateObject private var storage = AppStorageManager()
+    // Use EnvironmentObject instead of StateObject to ensure we're using the same instance
+    // across the app and picking up changes from settings
+    @EnvironmentObject var storage: AppStorageManager
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
-    @State private var selectedModel: String = "gpt-4"
-    @State private var selectedConversation: Conversation?
     @State private var selectedLanguage: String = "English"
     @State private var isStreaming: Bool = false
     @State private var streamingMessage: String = ""
@@ -37,8 +38,10 @@ struct ChatView: View {
     @State private var currentConversationID: UUID? = nil  // Track current conversation ID
     @State private var isContextSummarized: Bool = false  // Track if context is summarized
     @State private var contextUsagePercent: Double = 0  // Track context window usage
+    @State private var selectedItem: PhotosPickerItem? = nil
+    @State private var selectedImageData: Data? = nil
     let models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"]
-    let languages = ["English", "Spanish", "French", "German", "Chinese", "Japanese"]
+    let languages = ["English", "Spanish", "French", "German", "Chinese", "Japanese", "Tagalog"]
     
     var body: some View {
         NavigationView {
@@ -78,19 +81,6 @@ struct ChatView: View {
                 // Context window usage indicator
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        // Model indicator
-                        HStack(spacing: 4) {
-                            Image(systemName: "cpu")
-                                .font(.caption)
-                            Text(storage.preferredModel)
-                                .font(.caption)
-                                .fontWeight(.medium)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.1))
-                        .cornerRadius(8)
-                        
                         Spacer()
                         
                         Text("Context: \(Int(contextUsagePercent))%")
@@ -155,47 +145,103 @@ struct ChatView: View {
     }
     // Update the inputArea to make the stop button more visible
 var inputArea: some View {
-    HStack {
-        TextField("Type a message...", text: $inputText, onCommit: {
-            if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
-                sendMessage()
+    VStack(spacing: 8) {
+        // Model and language selection row
+        HStack {
+            // Model indicator and picker
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(.caption)
+                Text(storage.preferredModel)
+                    .font(.caption)
+                    .fontWeight(.medium)
             }
-        })
-        .textFieldStyle(RoundedBorderTextFieldStyle())
-        .disabled(isStreaming)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.blue.opacity(0.1))
+            .cornerRadius(8)
+            
+            // Temperature indicator
+            HStack(spacing: 4) {
+                Image(systemName: "thermometer")
+                    .font(.caption)
+                Text("\(storage.temperature, specifier: "%.1f")")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.orange.opacity(0.1))
+            .cornerRadius(8)
+            
+            Spacer()
+            
+            // Language picker
+            Picker("Language", selection: $selectedLanguage) {
+                ForEach(languages, id: \.self) { language in
+                    Text(language)
+                }
+            }
+            .pickerStyle(MenuPickerStyle())
+            .disabled(isStreaming)
+        }
+        .padding(.horizontal)
         
-        Picker("Language", selection: $selectedLanguage) {
-            ForEach(languages, id: \.self) { language in
-                Text(language)
+        // Input field, image picker and send button
+        HStack {
+            // Image picker button
+            PhotosPicker(
+                selection: $selectedItem,
+                matching: .images,
+                photoLibrary: .shared()) {
+                    Image(systemName: "photo")
+                        .foregroundColor(.blue)
+                        .padding(8)
+                }
+                .disabled(isStreaming)
+                .onChange(of: selectedItem) { newItem in
+                    Task {
+                        if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                            selectedImageData = data
+                            // Send the image message immediately
+                            sendImageMessage(imageData: data)
+                        }
+                    }
+                }
+            
+            TextField("Type a message...", text: $inputText, onCommit: {
+                if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
+                    sendMessage()
+                }
+            })
+            .textFieldStyle(RoundedBorderTextFieldStyle())
+            .disabled(isStreaming)
+            
+            if isStreaming {
+                Button(action: stopStreaming) {
+                    Image(systemName: "stop.fill")
+                        .foregroundColor(.red)
+                        .padding(8)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.gray.opacity(0.2))
+            } else {
+                Button(action: sendMessage) {
+                    Image(systemName: "paperplane.fill")
+                        .padding(8)
+                }
+                .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .pickerStyle(MenuPickerStyle())
-        .disabled(isStreaming)
-        
-        if isStreaming {
-            Button(action: stopStreaming) {
-                Image(systemName: "stop.fill")
-                    .foregroundColor(.red)
-                    .padding()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.gray.opacity(0.2))
-        } else {
-            Button(action: sendMessage) {
-                Image(systemName: "paperplane.fill")
-                    .padding()
-            }
-            .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
+        .padding(.horizontal)
     }
-    .padding()
+    .padding(.vertical, 8)
 }
 
 
 // Update sendMessage function to handle streaming properly
 private func sendMessage() {
     isStreaming = true
-    
     
     // Append user message
     let userMessage = ChatMessage(text: inputText, isUser: true)
@@ -206,11 +252,16 @@ private func sendMessage() {
     streamingMessage = ""
     currentDelta = ""
     
+    // Reset selected image
+    selectedItem = nil
+    selectedImageData = nil
+    
     
     // Add a timeout to handle connection failures
-    let timeoutTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { _ in
+    // Using a longer timeout (30 seconds) to accommodate model loading time
+    let timeoutTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { _ in
         if isStreaming && streamingMessage.isEmpty {
-            messages.append(ChatMessage(text: "Connection failed or timed out. Please try again.", isUser: false))
+            messages.append(ChatMessage(text: "Connection failed or timed out. The model might be taking longer to load or there might be an issue with the connection. Please try again.", isUser: false))
             isStreaming = false
         }
     }
@@ -227,6 +278,7 @@ private func sendMessage() {
         endpoint: storage.apiEndpoint,
         preferredLanguage: selectedLanguage,
         useChatEndpoint: storage.useChatEndpoint,
+        temperature: storage.temperature, // Pass the temperature setting
         conversationHistory: messages, // Pass the full conversation history
         onUpdate: { [self] chunk, isFinal in
             print("Raw chunk: \(chunk)")
@@ -316,7 +368,7 @@ private func sendMessage() {
         if let data = conversation.messages,
            let savedMessages = try? JSONDecoder().decode([ChatMessage].self, from: data) {
             messages = savedMessages
-            selectedModel = conversation.model ?? "gpt-4"
+            storage.preferredModel = conversation.model ?? "gpt-4"
             storage.prompt = conversation.prompt ?? "You are a helpful assistant."
             selectedLanguage = conversation.language ?? "English"
             currentConversationID = conversation.id  // Set current conversation ID when loading
@@ -346,7 +398,14 @@ private func sendMessage() {
         var totalTokens = LLMService.estimateTokens(in: storage.prompt) // System prompt
         
         for message in messages {
-            totalTokens += LLMService.estimateTokens(in: message.text)
+            switch message.content {
+            case .text(let text):
+                totalTokens += LLMService.estimateTokens(in: text)
+            case .image(_):
+                // Estimate image tokens - this is a rough approximation
+                // Most vision models count an image as ~1000 tokens
+                totalTokens += 1000
+            }
         }
         
         // Calculate percentage of context window used
@@ -380,27 +439,97 @@ private func sendMessage() {
         // Clear everything for a fresh start
         clearConversation()
     }
+    
+    // Send an image message
+    private func sendImageMessage(imageData: Data) {
+        // Only proceed if not currently streaming
+        guard !isStreaming else { return }
+        
+        // Create and add the image message
+        let imageMessage = ChatMessage(imageData: imageData, isUser: true)
+        messages.append(imageMessage)
+        
+        // Reset any selected image data
+        selectedItem = nil
+        selectedImageData = nil
+        
+        // Calculate context usage
+        updateContextUsage()
+        
+        // Optionally, you could automatically send a message to the LLM here
+        // asking it to describe the image, but that would require vision capabilities
+        // in the model, which may not be available in all endpoints
+    }
 }
 
 // Extracted view for an individual chat message.
 struct MessageRow: View {
     var message: ChatMessage
+    @State private var showCopyConfirmation: Bool = false
     
     var body: some View {
         HStack {
             if message.isUser {
                 Spacer()
-                Text(message.text)
-                    .padding()
-                    .background(Color.blue.opacity(0.7))
-                    .cornerRadius(10)
-                    .foregroundColor(.white)
+                
+                // User message content
+                if case .text(let text) = message.content {
+                    Text(text)
+                        .padding()
+                        .background(Color.blue.opacity(0.7))
+                        .cornerRadius(10)
+                        .foregroundColor(.white)
+                        .contextMenu {
+                            Button(action: {
+                                UIPasteboard.general.string = text
+                                showCopyConfirmation = true
+                            }) {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                        }
+                } else if case .image(let imageData) = message.content, let uiImage = UIImage(data: imageData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 200, maxHeight: 200)
+                        .cornerRadius(10)
+                }
             } else {
-                Markdown(message.text)
-                    .markdownCodeSyntaxHighlighter(DefaultCodeSyntaxHighlighter())
-                    .padding()
-                    .background(Color.gray.opacity(0.3))
-                    .cornerRadius(10)
+                VStack(alignment: .leading) {
+                    if case .text(let text) = message.content {
+                        Markdown(text)
+                            .markdownCodeSyntaxHighlighter(DefaultCodeSyntaxHighlighter())
+                            .padding()
+                            .background(Color.gray.opacity(0.3))
+                            .cornerRadius(10)
+                            .contextMenu {
+                                Button(action: {
+                                    UIPasteboard.general.string = text
+                                    showCopyConfirmation = true
+                                }) {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                            }
+                    } else if case .image(let imageData) = message.content, let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 200, maxHeight: 200)
+                            .cornerRadius(10)
+                    }
+                    
+                    if showCopyConfirmation {
+                        Text("Copied to clipboard")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .padding(.leading, 8)
+                            .onAppear {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    showCopyConfirmation = false
+                                }
+                            }
+                    }
+                }
             }
         }
     }

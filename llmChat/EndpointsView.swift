@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 
 struct EndpointsView: View {
-    @StateObject private var storage = AppStorageManager()
+    @EnvironmentObject var storage: AppStorageManager
     @State private var isAddingEndpoint = false
     @State private var isEditingEndpoint = false
     @State private var editingEndpointID: UUID?
@@ -13,6 +13,7 @@ struct EndpointsView: View {
     @State private var isChatEndpoint = true
     @State private var requiresAuth = true
     @State private var defaultModel = "gpt-3.5-turbo"
+    @State private var temperature: Double = 1.0
     @State private var availableModels: [String] = []
     @State private var isLoadingModels = false
     @State private var modelLoadError: String? = nil
@@ -121,6 +122,7 @@ struct EndpointsView: View {
                         isChatEndpoint = endpoint.isChatEndpoint
                         requiresAuth = endpoint.requiresAuth
                         defaultModel = endpoint.defaultModel
+                        temperature = endpoint.temperature
                         isEditingEndpoint = true
                     }) {
                         Label("Edit", systemImage: "pencil")
@@ -151,7 +153,8 @@ struct EndpointsView: View {
                     url: baseURL, // Store only the base URL
                     isChatEndpoint: isChatEndpoint,
                     requiresAuth: requiresAuth,
-                    defaultModel: defaultModel
+                    defaultModel: defaultModel,
+                    temperature: temperature
                 )
                 // Automatically select the newly created endpoint
                 storage.selectEndpoint(id: newEndpointID)
@@ -167,7 +170,8 @@ struct EndpointsView: View {
                         url: baseURL, // Store only the base URL
                         isChatEndpoint: isChatEndpoint,
                         requiresAuth: requiresAuth,
-                        defaultModel: defaultModel
+                        defaultModel: defaultModel,
+                        temperature: temperature
                     )
                     // Re-select the endpoint to apply any changes
                     storage.selectEndpoint(id: id)
@@ -185,6 +189,7 @@ struct EndpointsView: View {
         isChatEndpoint = true
         requiresAuth = true
         defaultModel = "gpt-3.5-turbo"
+        temperature = 1.0
         tempApiToken = ""
         availableModels = []
         modelLoadError = nil
@@ -431,6 +436,20 @@ struct EndpointsView: View {
                                 Text(model).tag(model)
                             }
                         }
+                        
+                        // Temperature slider
+                        VStack(alignment: .leading) {
+                            HStack {
+                                Text("Temperature: \(temperature, specifier: "%.1f")")
+                                Spacer()
+                                Text(temperature < 0.3 ? "More predictable" : 
+                                     temperature > 0.7 ? "More creative" : "Balanced")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Slider(value: $temperature, in: 0.0...2.0, step: 0.1)
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
                 

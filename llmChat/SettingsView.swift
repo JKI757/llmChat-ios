@@ -2,11 +2,10 @@ import SwiftUI
 import Combine
 
 struct SettingsView: View {
-    @StateObject private var storage = AppStorageManager()
+    @EnvironmentObject var storage: AppStorageManager
     @State private var availableModels: [String] = []
     @State private var isLoadingModels = false
     @State private var modelLoadError: String?
-    @State private var selectedModel: String = ""
     
     var body: some View {
         Form {
@@ -63,6 +62,20 @@ struct SettingsView: View {
                             Text(model).tag(model)
                         }
                     }
+                    
+                    // Temperature slider
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("Temperature: \(storage.temperature, specifier: "%.1f")")
+                            Spacer()
+                            Text(storage.temperature < 0.3 ? "More predictable" : 
+                                 storage.temperature > 0.7 ? "More creative" : "Balanced")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $storage.temperature, in: 0.0...2.0, step: 0.1)
+                    }
+                    .padding(.top, 8)
                 } else {
                     Button("Load Available Models") {
                         fetchAvailableModels()
@@ -123,8 +136,7 @@ struct SettingsView: View {
                 fetchAvailableModels()
             }
             
-            // Initialize selected model from storage
-            selectedModel = storage.preferredModel
+            // No need to initialize selectedModel as we're using storage.preferredModel directly
         }
     }
     
@@ -171,6 +183,8 @@ struct SettingsView: View {
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        // Set a longer timeout (30 seconds) to accommodate model loading time
+        request.timeoutInterval = 30.0
         
         // Add authorization header if needed
         if !storage.apiToken.isEmpty {
