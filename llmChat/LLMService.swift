@@ -192,7 +192,16 @@ class LLMService: NSObject, URLSessionDataDelegate {
         // Set a longer timeout (30 seconds) to accommodate model loading time
         request.timeoutInterval = 30.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
+        
+        // Add authorization header if API token is available
+        if !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let token = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            print("Using API token: \(token.prefix(5))...\(token.suffix(5))")
+        } else {
+            print("WARNING: No API token provided for request to \(url.absoluteString)")
+        }
+        
         request.httpBody = jsonData
 
         // Create a session with a longer timeout configuration that allows HTTP connections
@@ -215,8 +224,33 @@ class LLMService: NSObject, URLSessionDataDelegate {
     // URLSessionDataDelegate method to capture streamed data
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         if let chunkString = String(data: data, encoding: .utf8) {
-            DispatchQueue.main.async {
-                self.onUpdate?(chunkString, false)
+            // Split the string by newlines to handle multiple events in one chunk
+            let lines = chunkString.components(separatedBy: "\n")
+            
+            for line in lines where !line.isEmpty {
+                // Check if this is a completion message with empty delta
+                if line.contains("finish_reason\":\"stop\"") {
+                    print("Detected completion message with finish_reason: stop")
+                }
+                
+                DispatchQueue.main.async {
+                    // Process the chunk based on the endpoint type
+                    if self.useChatEndpoint {
+                        // Handle OpenAI chat completions format
+                        self.onUpdate?(line, false)
+                    } else {
+                        // Handle non-chat completions format
+                        // Some APIs return raw text without the "data: " prefix
+                        // Try to detect if this is a JSON response or plain text
+                        if line.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") {
+                            // This is likely JSON, wrap it with "data: " prefix for consistent handling
+                            self.onUpdate?("data: " + line, false)
+                        } else {
+                            // This is likely plain text, just pass it through
+                            self.onUpdate?(line, false)
+                        }
+                    }
+                }
             }
         }
     }
@@ -224,13 +258,15 @@ class LLMService: NSObject, URLSessionDataDelegate {
     // URLSessionTaskDelegate method to signal completion or error
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
+            print("Stream error: \(error.localizedDescription)")
             DispatchQueue.main.async {
                 self.onUpdate?("Error: \(error.localizedDescription)", true)
             }
         } else {
+            print("Stream completed successfully")
             DispatchQueue.main.async {
-                // Signal completion with an empty string (you may modify this as needed)
-                self.onUpdate?("", true)
+                // Send a final [DONE] message to signal completion
+                self.onUpdate?("data: [DONE]", true)
             }
         }
     }

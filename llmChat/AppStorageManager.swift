@@ -48,6 +48,22 @@ class AppStorageManager: ObservableObject {
             UserDefaults.standard.set(encodedData, forKey: "savedEndpoints")
         }
     }
+    
+    // Dictionary to store API tokens for each endpoint
+    @Published var endpointTokens: [String: String] = {
+        if let data = UserDefaults.standard.data(forKey: "endpointTokens"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            return decoded
+        }
+        return [:]
+    }() {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(endpointTokens) {
+                UserDefaults.standard.set(encoded, forKey: "endpointTokens")
+            }
+        }
+    }
+    
     @Published var apiToken: String {
         didSet { UserDefaults.standard.set(apiToken, forKey: "apiToken") }
     }
@@ -211,11 +227,25 @@ class AppStorageManager: ObservableObject {
             preferredModel = selectedEndpoint.defaultModel
             temperature = selectedEndpoint.temperature
             
+            // Set the API token for this endpoint if it exists and requires auth
+            if selectedEndpoint.requiresAuth {
+                let storedToken = endpointTokens[id.uuidString] ?? ""
+                apiToken = storedToken
+                
+                // Debug logging
+                if !storedToken.isEmpty {
+                    print("Retrieved API token for endpoint \(selectedEndpoint.name): \(storedToken.prefix(5))...\(storedToken.suffix(5))")
+                } else {
+                    print("No API token found for endpoint \(selectedEndpoint.name)")
+                }
+            }
+            
             // Ensure the changes are immediately applied
             UserDefaults.standard.set(apiEndpoint, forKey: "apiEndpoint")
             UserDefaults.standard.set(useChatEndpoint, forKey: "useChatEndpoint")
             UserDefaults.standard.set(preferredModel, forKey: "preferredModel")
             UserDefaults.standard.set(temperature, forKey: "temperature")
+            UserDefaults.standard.set(apiToken, forKey: "apiToken")
             
             // Notify observers that the endpoint has changed
             objectWillChange.send()

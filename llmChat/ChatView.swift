@@ -10,16 +10,102 @@ struct StreamResponse: Codable {
     let created: Int
     let model: String
     let choices: [Choice]
+    let system_fingerprint: String?
+    let service_tier: String?
     
     struct Choice: Codable {
         let index: Int
         struct Delta: Codable {
             let role: String?
             let content: String?
+            
+            // Empty initializer to handle empty delta objects
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                role = try container.decodeIfPresent(String.self, forKey: .role)
+                content = try container.decodeIfPresent(String.self, forKey: .content)
+            }
+            
+            private enum CodingKeys: String, CodingKey {
+                case role, content
+            }
         }
         let delta: Delta
-        let logprobs: String?
+        let logprobs: JSONValue?
         let finish_reason: String?
+    }
+}
+
+// Helper type to handle null values in JSON
+enum JSONValue: Codable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        
+        if container.decodeNil() {
+            self = .null
+            return
+        }
+        
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+            return
+        }
+        
+        if let value = try? container.decode(Int.self) {
+            self = .int(value)
+            return
+        }
+        
+        if let value = try? container.decode(Double.self) {
+            self = .double(value)
+            return
+        }
+        
+        if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+            return
+        }
+        
+        if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+            return
+        }
+        
+        if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+            return
+        }
+        
+        throw DecodingError.dataCorruptedError(in: container, debugDescription: "Cannot decode JSONValue")
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
     }
 }
 
@@ -294,6 +380,11 @@ private func sendMessage() {
                     if !currentDelta.isEmpty {
                         print("Adding final message with length: \(currentDelta.count)")  // Debug print
                         messages.append(ChatMessage(text: currentDelta, isUser: false))
+                    } else {
+                        print("No content accumulated to add as final message")
+                        // If we didn't accumulate any content but received a final signal,
+                        // add an empty message to avoid confusion
+                        messages.append(ChatMessage(text: "[No response received from the model. Please try again or check your API settings.]", isUser: false))
                     }
                     isStreaming = false
                     streamingMessage = ""
@@ -315,18 +406,115 @@ private func sendMessage() {
                         currentConversationID = savedID
                     }
                 } else {
-                    // Strip "data: " prefix and parse JSON
+                    // Handle different response formats
                     if chunk.hasPrefix("data: ") {
+                        // OpenAI-style format with "data: " prefix
                         let jsonString = String(chunk.dropFirst(6))
-                        if let data = jsonString.data(using: .utf8),
-                           let response = try? JSONDecoder().decode(StreamResponse.self, from: data) {
-                            if let content = response.choices.first?.delta.content {
-                                currentDelta += content
-                                streamingMessage = currentDelta
-                                print("Added content: \(content)")
+                        
+                        // Handle [DONE] messages
+                        if jsonString.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+                            print("Received [DONE] message")
+                            // If we have accumulated content, add it as a final message
+                            if !currentDelta.isEmpty {
+                                print("Adding final message from [DONE] with content: \(currentDelta)")
+                                messages.append(ChatMessage(text: currentDelta, isUser: false))
+                                isStreaming = false
                             }
-                        } else {
-                            print("Failed to parse JSON: \(jsonString)")
+                            return
+                        }
+                        
+                        // Try to parse the response using different approaches
+                        if let data = jsonString.data(using: .utf8) {
+                            // First try to parse as OpenAI format
+                            if let response = try? JSONDecoder().decode(StreamResponse.self, from: data) {
+                                print("Successfully decoded StreamResponse: \(response.id)")
+                                
+                                // Check if this is a completion message with empty delta
+                                if let finishReason = response.choices.first?.finish_reason, 
+                                   finishReason == "stop" {
+                                    print("Received completion message with finish_reason: stop")
+                                    
+                                    // If we have content accumulated and this is the final message, add it
+                                    if !currentDelta.isEmpty && isFinal {
+                                        print("Adding final message with accumulated content: \(currentDelta)")
+                                        messages.append(ChatMessage(text: currentDelta, isUser: false))
+                                        isStreaming = false
+                                    }
+                                } 
+                                // Check if there's content to add
+                                else if let content = response.choices.first?.delta.content {
+                                    currentDelta += content
+                                    streamingMessage = currentDelta
+                                    print("Added content: \(content)")
+                                }
+                                // If we got here, we successfully parsed but there was no content
+                                else {
+                                    print("Parsed response but no content in delta")
+                                }
+                            }
+                            // If standard format fails, try generic JSON parsing
+                            else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                                print("Trying alternative JSON parsing")
+                                
+                                // Try to find content in various locations
+                                if let choices = json["choices"] as? [[String: Any]],
+                                   let firstChoice = choices.first {
+                                    
+                                    // Check for delta.content structure
+                                    if let delta = firstChoice["delta"] as? [String: Any],
+                                       let content = delta["content"] as? String {
+                                        currentDelta += content
+                                        streamingMessage = currentDelta
+                                        print("Found content in delta.content: \(content)")
+                                    }
+                                    // Check for text structure
+                                    else if let text = firstChoice["text"] as? String {
+                                        currentDelta += text
+                                        streamingMessage = currentDelta
+                                        print("Found content in text: \(text)")
+                                    }
+                                    // Check for content structure
+                                    else if let content = firstChoice["content"] as? String {
+                                        currentDelta += content
+                                        streamingMessage = currentDelta
+                                        print("Found content in content: \(content)")
+                                    }
+                                    // Check for empty delta (completion message)
+                                    else if let finishReason = firstChoice["finish_reason"] as? String, 
+                                            finishReason == "stop" {
+                                        print("Found completion message with finish_reason: stop")
+                                    }
+                                    else {
+                                        print("No recognizable content format in choices")
+                                    }
+                                }
+                                // Try to find direct content
+                                else if let content = json["content"] as? String {
+                                    currentDelta += content
+                                    streamingMessage = currentDelta
+                                    print("Found direct content: \(content)")
+                                }
+                                else if let text = json["text"] as? String {
+                                    currentDelta += text
+                                    streamingMessage = currentDelta
+                                    print("Found direct text: \(text)")
+                                }
+                                else {
+                                    print("No recognizable content in JSON")
+                                }
+                            }
+                            else {
+                                print("Failed to parse JSON: \(jsonString)")
+                            }
+                        }
+                    } else {
+                        // Handle plain text responses (no JSON)
+                        // Some APIs return raw text without JSON formatting
+                        let trimmedChunk = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmedChunk.isEmpty {
+                            currentDelta += trimmedChunk
+                            streamingMessage = currentDelta
+                            print("Added plain text: \(trimmedChunk)")
                         }
                     }
                 }

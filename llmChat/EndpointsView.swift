@@ -20,6 +20,24 @@ struct EndpointsView: View {
     @State private var tempApiToken = ""
     @State private var isEditMode = false
     
+    // Dictionary to store API tokens for each endpoint
+    @AppStorage("endpointTokens") private var endpointTokensData: Data = Data()
+    
+    // Get the current tokens dictionary
+    private func getEndpointTokens() -> [String: String] {
+        if let decoded = try? JSONDecoder().decode([String: String].self, from: endpointTokensData) {
+            return decoded
+        }
+        return [:]
+    }
+    
+    // Save the tokens dictionary
+    private func saveEndpointTokens(_ tokens: [String: String]) {
+        if let encoded = try? JSONEncoder().encode(tokens) {
+            endpointTokensData = encoded
+        }
+    }
+    
     // API endpoint types
     let apiTypes = [
         "chat/completions": "Chat API",
@@ -89,11 +107,18 @@ struct EndpointsView: View {
                     isChatEndpoint = endpoint.isChatEndpoint
                     requiresAuth = endpoint.requiresAuth
                     defaultModel = endpoint.defaultModel
+                    temperature = endpoint.temperature
+                    
+                    // Load the saved API token for this endpoint
+                    tempApiToken = getEndpointTokens()[endpoint.id.uuidString] ?? ""
+                    
                     isEditingEndpoint = true
                 }
                 .simultaneousGesture(LongPressGesture().onEnded { _ in
                     // Select this endpoint on long press
                     storage.selectEndpoint(id: endpoint.id)
+                    // Reload available models for this endpoint
+                    loadModelsForEndpoint(endpoint)
                     // Show a confirmation
                     let generator = UINotificationFeedbackGenerator()
                     generator.notificationOccurred(.success)
@@ -101,6 +126,8 @@ struct EndpointsView: View {
                 .contextMenu {
                     Button(action: {
                         storage.selectEndpoint(id: endpoint.id)
+                        // Reload available models for this endpoint
+                        loadModelsForEndpoint(endpoint)
                         // Show a confirmation
                         let generator = UINotificationFeedbackGenerator()
                         generator.notificationOccurred(.success)
@@ -148,22 +175,46 @@ struct EndpointsView: View {
         .sheet(isPresented: $isAddingEndpoint) {
             endpointEditorView(title: "Add New Endpoint", buttonTitle: "Add") {
                 // Store only the base URL, not the full URL with API path
-                let newEndpointID = storage.addEndpoint(
-                    name: endpointName,
-                    url: baseURL, // Store only the base URL
-                    isChatEndpoint: isChatEndpoint,
-                    requiresAuth: requiresAuth,
-                    defaultModel: defaultModel,
-                    temperature: temperature
-                )
-                // Automatically select the newly created endpoint
-                storage.selectEndpoint(id: newEndpointID)
+                // Save the API token if authentication is required
+                if requiresAuth && !tempApiToken.isEmpty {
+                    let newEndpointID = storage.addEndpoint(
+                        name: endpointName,
+                        url: baseURL, // Store only the base URL
+                        isChatEndpoint: isChatEndpoint,
+                        requiresAuth: requiresAuth,
+                        defaultModel: defaultModel,
+                        temperature: temperature
+                    )
+                    
+                    // Store the API token for this endpoint
+                    var tokens = getEndpointTokens()
+                    tokens[newEndpointID.uuidString] = tempApiToken
+                    saveEndpointTokens(tokens)
+                    
+                    // Debug logging
+                    print("Saved API token for new endpoint \(endpointName): \(tempApiToken.prefix(5))...\(tempApiToken.suffix(5))")
+                    
+                    // Automatically select the newly created endpoint
+                    storage.selectEndpoint(id: newEndpointID)
+                } else {
+                    let newEndpointID = storage.addEndpoint(
+                        name: endpointName,
+                        url: baseURL, // Store only the base URL
+                        isChatEndpoint: isChatEndpoint,
+                        requiresAuth: requiresAuth,
+                        defaultModel: defaultModel,
+                        temperature: temperature
+                    )
+                    // Automatically select the newly created endpoint
+                    storage.selectEndpoint(id: newEndpointID)
+                }
                 isAddingEndpoint = false
             }
         }
         .sheet(isPresented: $isEditingEndpoint) {
             endpointEditorView(title: "Edit Endpoint", buttonTitle: "Save") {
                 if let id = editingEndpointID {
+                    // Update the endpoint
                     storage.updateEndpoint(
                         id: id,
                         name: endpointName,
@@ -173,6 +224,20 @@ struct EndpointsView: View {
                         defaultModel: defaultModel,
                         temperature: temperature
                     )
+                    
+                    // Save the API token if authentication is required
+                    if requiresAuth {
+                        var tokens = getEndpointTokens()
+                        if !tempApiToken.isEmpty {
+                            tokens[id.uuidString] = tempApiToken
+                            print("Updated API token for endpoint \(endpointName): \(tempApiToken.prefix(5))...\(tempApiToken.suffix(5))")
+                        } else {
+                            tokens.removeValue(forKey: id.uuidString)
+                            print("Removed API token for endpoint \(endpointName)")
+                        }
+                        saveEndpointTokens(tokens)
+                    }
+                    
                     // Re-select the endpoint to apply any changes
                     storage.selectEndpoint(id: id)
                 }
@@ -265,6 +330,17 @@ struct EndpointsView: View {
         return fullURL
     }
     
+    // Helper function to load models for a specific endpoint
+    private func loadModelsForEndpoint(_ endpoint: SavedEndpoint) {
+        // Set up the UI state for model loading
+        baseURL = endpoint.url
+        requiresAuth = endpoint.requiresAuth
+        tempApiToken = getEndpointTokens()[endpoint.id.uuidString] ?? ""
+        
+        // Load the models
+        loadModels()
+    }
+    
     private func loadModels() {
         guard !baseURL.isEmpty else { return }
         
@@ -292,8 +368,15 @@ struct EndpointsView: View {
         request.httpMethod = "GET"
         
         // Add authorization header if required
-        if requiresAuth && !tempApiToken.isEmpty {
-            request.addValue("Bearer \(tempApiToken)", forHTTPHeaderField: "Authorization")
+        if requiresAuth {
+            if !tempApiToken.isEmpty {
+                request.addValue("Bearer \(tempApiToken)", forHTTPHeaderField: "Authorization")
+            } else {
+                // If auth is required but no token is provided, show an error
+                isLoadingModels = false
+                modelLoadError = "Authentication is required but no API token is provided"
+                return
+            }
         }
         
         // Make the request
@@ -423,7 +506,7 @@ struct EndpointsView: View {
                                 }
                             }
                         }
-                        .disabled(endpointURL.isEmpty || (requiresAuth && tempApiToken.isEmpty))
+                        .disabled(endpointURL.isEmpty)
                         
                         if let error = modelLoadError {
                             Text(error)

@@ -10,33 +10,35 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section(header: Text("API Configuration")) {
-                TextField("API Token", text: $storage.apiToken)
-                    .textContentType(.none)
-                    .autocapitalization(.none)
-                
-                TextField("API Endpoint", text: $storage.apiEndpoint)
-                    .keyboardType(.URL)
-                    .textContentType(.URL)
-                    .autocapitalization(.none)
-                    .disabled(true) // Make endpoint URL read-only
-                
-                Toggle("Use Chat Endpoint", isOn: $storage.useChatEndpoint)
-                    .help("Use /v1/chat/completions instead of /v1/completions")
-                    .disabled(true) // Make endpoint type read-only
-                
-                // Endpoint selection menu
+                // Endpoint picker
                 if !storage.savedEndpoints.isEmpty {
-                    Menu {
-                        ForEach(storage.savedEndpoints) { endpoint in
-                            Button(endpoint.name) {
-                                storage.selectEndpoint(id: endpoint.id)
-                            }
+                    // Find the currently selected endpoint
+                    let currentEndpointID = storage.savedEndpoints.first(where: { $0.url == storage.apiEndpoint })?.id ?? UUID()
+                    
+                    Picker("API Endpoint", selection: Binding<UUID>(
+                        get: { currentEndpointID },
+                        set: { newID in
+                            storage.selectEndpoint(id: newID)
+                            // Refresh models when endpoint changes
+                            fetchAvailableModels()
                         }
-                    } label: {
-                        Label("Select Saved Endpoint", systemImage: "network")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    )) {
+                        ForEach(storage.savedEndpoints) { endpoint in
+                            Text(endpoint.name + (endpoint.requiresAuth ? " (Auth)" : "")).tag(endpoint.id)
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    .pickerStyle(MenuPickerStyle())
+                    
+                    // Show the current endpoint details
+                    if let selectedEndpoint = storage.savedEndpoints.first(where: { $0.url == storage.apiEndpoint }) {
+                        Text("Using: \(selectedEndpoint.url)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("No saved endpoints. Please add an endpoint using the Manage Endpoint Library option below.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 
                 // Navigation to endpoint library
@@ -62,6 +64,15 @@ struct SettingsView: View {
                             Text(model).tag(model)
                         }
                     }
+                    
+                    // API Type picker (replacing the toggle)
+                    Picker("API Type", selection: $storage.useChatEndpoint) {
+                        Text("Chat Completions").tag(true)
+                        Text("Completions").tag(false)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .disabled(true) // Make endpoint type read-only
+                    .help("Use /v1/chat/completions instead of /v1/completions")
                     
                     // Temperature slider
                     VStack(alignment: .leading) {
@@ -150,7 +161,10 @@ struct SettingsView: View {
     }
     
     private func fetchAvailableModels() {
-        guard !storage.apiEndpoint.isEmpty else { return }
+        guard !storage.apiEndpoint.isEmpty else { 
+            print("Cannot fetch models: API endpoint is empty")
+            return 
+        }
         
         isLoadingModels = true
         availableModels = []
@@ -173,11 +187,13 @@ struct SettingsView: View {
         
         // Construct the models URL
         let modelsURL = baseURL + "/v1/models"
+        print("Fetching models from: \(modelsURL)")
         
         // Create URL request
         guard let url = URL(string: modelsURL) else {
             isLoadingModels = false
             modelLoadError = "Invalid URL"
+            print("Invalid models URL: \(modelsURL)")
             return
         }
         
@@ -188,7 +204,11 @@ struct SettingsView: View {
         
         // Add authorization header if needed
         if !storage.apiToken.isEmpty {
-            request.addValue("Bearer \(storage.apiToken)", forHTTPHeaderField: "Authorization")
+            let token = storage.apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            print("Using API token for models request: \(token.prefix(5))...\(token.suffix(5))")
+        } else {
+            print("WARNING: No API token provided for models request")
         }
         
         URLSession.shared.dataTask(with: request) { data, response, error in
@@ -196,17 +216,34 @@ struct SettingsView: View {
                 self.isLoadingModels = false
                 
                 if let error = error {
-                    self.modelLoadError = "Error: \(error.localizedDescription)"
+                    let errorMessage = "Error: \(error.localizedDescription)"
+                    print("Model fetch error: \(errorMessage)")
+                    self.modelLoadError = errorMessage
                     return
                 }
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
+                    print("Model fetch error: Invalid response type")
                     self.modelLoadError = "Invalid response"
                     return
                 }
                 
                 if httpResponse.statusCode != 200 {
-                    self.modelLoadError = "Error: HTTP \(httpResponse.statusCode)"
+                    let errorMessage = "Error: HTTP \(httpResponse.statusCode)"
+                    print("Model fetch error: \(errorMessage)")
+                    
+                    // Add more specific error messages for common HTTP status codes
+                    if httpResponse.statusCode == 401 {
+                        self.modelLoadError = "Authentication failed. Please check your API token."
+                    } else if httpResponse.statusCode == 403 {
+                        self.modelLoadError = "Access forbidden. Your API token may not have permission to list models."
+                    } else if httpResponse.statusCode == 404 {
+                        self.modelLoadError = "Models endpoint not found. Please check your API endpoint URL."
+                    } else if httpResponse.statusCode >= 500 {
+                        self.modelLoadError = "Server error (\(httpResponse.statusCode)). Please try again later."
+                    } else {
+                        self.modelLoadError = errorMessage
+                    }
                     return
                 }
                 
@@ -253,10 +290,19 @@ struct SettingsView: View {
                     self.availableModels.sort()
                     
                     if self.availableModels.isEmpty {
+                        print("No models found in API response")
                         self.modelLoadError = "No models found or unsupported format"
-                    } else if !self.availableModels.contains(self.storage.preferredModel) || self.storage.preferredModel.isEmpty {
-                        // Set preferred model to the first available model if current one isn't available
-                        self.storage.preferredModel = self.availableModels.first ?? "gpt-3.5-turbo"
+                    } else {
+                        print("Successfully loaded \(self.availableModels.count) models")
+                        
+                        // If current model isn't in the list or is empty, select a new one
+                        if !self.availableModels.contains(self.storage.preferredModel) || self.storage.preferredModel.isEmpty {
+                            let oldModel = self.storage.preferredModel
+                            self.storage.preferredModel = self.availableModels.first ?? "gpt-3.5-turbo"
+                            print("Changed model from '\(oldModel)' to '\(self.storage.preferredModel)'")
+                        } else {
+                            print("Current model '\(self.storage.preferredModel)' is valid")
+                        }
                     }
                 } catch {
                     self.modelLoadError = "Failed to parse response: \(error.localizedDescription)"
