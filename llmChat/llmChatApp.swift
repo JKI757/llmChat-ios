@@ -38,7 +38,7 @@ struct LLMChatApp: App {
     
     var body: some Scene {
         WindowGroup {
-            ChatView()
+            MainView()
                 .environmentObject(storageManager)
         }
     }

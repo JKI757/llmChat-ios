@@ -11,12 +11,27 @@ import Foundation
 struct SavedPrompt: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
-    var content: String
+    var systemPrompt: String
+    var userPrompt: String
     
+    // For backward compatibility
+    var content: String {
+        return systemPrompt
+    }
+    
+    init(id: UUID = UUID(), name: String, systemPrompt: String, userPrompt: String = "") {
+        self.id = id
+        self.name = name
+        self.systemPrompt = systemPrompt
+        self.userPrompt = userPrompt
+    }
+    
+    // Backward compatibility initializer
     init(id: UUID = UUID(), name: String, content: String) {
         self.id = id
         self.name = name
-        self.content = content
+        self.systemPrompt = content
+        self.userPrompt = ""
     }
 }
 
@@ -42,6 +57,9 @@ struct SavedEndpoint: Identifiable, Codable, Equatable {
 }
 
 class AppStorageManager: ObservableObject {
+    // Models available for the current endpoint
+    @Published var availableModels: [String] = []
+    @Published var hasValidEndpoint: Bool = false
     // Add a method to save endpoints to UserDefaults
     private func saveEndpoints() {
         if let encodedData = try? JSONEncoder().encode(savedEndpoints) {
@@ -72,8 +90,18 @@ class AppStorageManager: ObservableObject {
         didSet { UserDefaults.standard.set(apiEndpoint, forKey: "apiEndpoint") }
     }
     
-    @Published var prompt: String {
-        didSet { UserDefaults.standard.set(prompt, forKey: "prompt") }
+    @Published var systemPrompt: String {
+        didSet { UserDefaults.standard.set(systemPrompt, forKey: "systemPrompt") }
+    }
+    
+    @Published var userPrompt: String {
+        didSet { UserDefaults.standard.set(userPrompt, forKey: "userPrompt") }
+    }
+    
+    // For backward compatibility
+    var prompt: String {
+        get { return systemPrompt }
+        set { systemPrompt = newValue }
     }
     
     @Published var savedPrompts: [SavedPrompt] = [] {
@@ -101,6 +129,16 @@ class AppStorageManager: ObservableObject {
             }
         }
     }
+    
+    @Published var defaultPromptID: UUID? {
+        didSet {
+            if let id = defaultPromptID {
+                UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "defaultPromptID")
+            }
+        }
+    }
     @Published var preferredLanguage: String {
         didSet { UserDefaults.standard.set(preferredLanguage, forKey: "preferredLanguage") }
     }
@@ -118,7 +156,8 @@ class AppStorageManager: ObservableObject {
     init() {
         self.apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
         self.apiEndpoint = UserDefaults.standard.string(forKey: "apiEndpoint") ?? ""
-        self.prompt = UserDefaults.standard.string(forKey: "prompt") ?? "You are a helpful AI assistant."
+        self.systemPrompt = UserDefaults.standard.string(forKey: "systemPrompt") ?? "You are a helpful AI assistant."
+        self.userPrompt = UserDefaults.standard.string(forKey: "userPrompt") ?? ""
         self.temperature = UserDefaults.standard.double(forKey: "temperature") != 0 ? UserDefaults.standard.double(forKey: "temperature") : 1.0
         self.preferredLanguage = UserDefaults.standard.string(forKey: "preferredLanguage") ?? "English"
         self.preferredModel = UserDefaults.standard.string(forKey: "preferredModel") ?? "gpt-3.5-turbo"
@@ -139,8 +178,8 @@ class AppStorageManager: ObservableObject {
         } else {
             // Add default prompts if none exist
             self.savedPrompts = [
-                SavedPrompt(name: "Default Assistant", content: "You are a helpful AI assistant."),
-                SavedPrompt(name: "Code Expert", content: "You are a coding expert who provides clear, efficient solutions with explanations.")
+                SavedPrompt(name: "Default Assistant", systemPrompt: "You are a helpful AI assistant.", userPrompt: ""),
+                SavedPrompt(name: "Code Expert", systemPrompt: "You are a coding expert who provides clear, efficient solutions with explanations.", userPrompt: "Please help me solve the following coding problem:")
             ]
         }
         
@@ -166,18 +205,168 @@ class AppStorageManager: ObservableObject {
            let defaultEndpoint = self.savedEndpoints.first(where: { $0.id == defaultID }) {
             self.selectEndpoint(id: defaultID)
         }
+        
+        // Load default prompt ID
+        if let defaultPromptIDString = UserDefaults.standard.string(forKey: "defaultPromptID"),
+           let uuid = UUID(uuidString: defaultPromptIDString) {
+            self.defaultPromptID = uuid
+            
+            // If we have a default prompt, use it on startup
+            if let defaultPrompt = self.savedPrompts.first(where: { $0.id == uuid }) {
+                self.selectPrompt(id: uuid)
+            }
+        } else if !self.savedPrompts.isEmpty {
+            // Set the first prompt as default if none is set
+            self.defaultPromptID = self.savedPrompts.first?.id
+        }
+    }
+    
+    // MARK: - Endpoint Validation
+    
+    func checkEndpointAndFetchModels(completion: @escaping (Bool) -> Void) {
+        guard !apiEndpoint.isEmpty else {
+            hasValidEndpoint = false
+            availableModels = []
+            completion(false)
+            return
+        }
+        
+        // Extract the base URL from the endpoint URL
+        var baseURL = apiEndpoint
+        
+        // Clean the base URL - remove any path components after /v1/
+        if baseURL.contains("/v1/") {
+            if let range = baseURL.range(of: "/v1/") {
+                baseURL = String(baseURL[..<range.lowerBound])
+            }
+        }
+        
+        // Remove trailing slashes
+        while baseURL.hasSuffix("/") {
+            baseURL = String(baseURL.dropLast())
+        }
+        
+        // Construct the models URL
+        let modelsURL = baseURL + "/v1/models"
+        print("Fetching models from: \(modelsURL)")
+        
+        // Create URL request
+        guard let url = URL(string: modelsURL) else {
+            hasValidEndpoint = false
+            availableModels = []
+            completion(false)
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30.0
+        
+        // Add authorization header if needed
+        if !apiToken.isEmpty {
+            let token = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Error fetching models: \(error.localizedDescription)")
+                    self.hasValidEndpoint = false
+                    self.availableModels = []
+                    completion(false)
+                    return
+                }
+                
+                guard let data = data else {
+                    print("No data received when fetching models")
+                    self.hasValidEndpoint = false
+                    self.availableModels = []
+                    completion(false)
+                    return
+                }
+                
+                // Try to parse the response
+                do {
+                    var models: [String] = []
+                    
+                    // First try OpenAI format
+                    if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let dataArray = json["data"] as? [[String: Any]] {
+                        // OpenAI format
+                        for item in dataArray {
+                            if let id = item["id"] as? String {
+                                models.append(id)
+                            }
+                        }
+                    }
+                    // Try Anthropic format
+                    else if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                            let modelsArray = json["models"] as? [[String: Any]] {
+                        for model in modelsArray {
+                            if let name = model["name"] as? String {
+                                models.append(name)
+                            }
+                        }
+                    }
+                    // Try simple array format
+                    else if let modelsArray = try JSONSerialization.jsonObject(with: data) as? [String] {
+                        models = modelsArray
+                    }
+                    
+                    if !models.isEmpty {
+                        self.availableModels = models
+                        self.hasValidEndpoint = true
+                        
+                        // If the current model isn't in the list, select the first available model
+                        if !models.contains(self.preferredModel) && !models.isEmpty {
+                            self.preferredModel = models[0]
+                        }
+                        
+                        completion(true)
+                    } else {
+                        print("No models found in response")
+                        self.hasValidEndpoint = false
+                        self.availableModels = []
+                        completion(false)
+                    }
+                } catch {
+                    print("Error parsing models response: \(error.localizedDescription)")
+                    self.hasValidEndpoint = false
+                    self.availableModels = []
+                    completion(false)
+                }
+            }
+        }.resume()
     }
     
     // MARK: - Prompt Management
     
-    func addPrompt(name: String, content: String) {
-        let newPrompt = SavedPrompt(name: name, content: content)
+    func addPrompt(name: String, systemPrompt: String, userPrompt: String = "") {
+        let newPrompt = SavedPrompt(name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
         savedPrompts.append(newPrompt)
     }
     
+    // Backward compatibility method
+    func addPrompt(name: String, content: String) {
+        let newPrompt = SavedPrompt(name: name, systemPrompt: content)
+        savedPrompts.append(newPrompt)
+    }
+    
+    func updatePrompt(id: UUID, name: String, systemPrompt: String, userPrompt: String = "") {
+        if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
+            savedPrompts[index] = SavedPrompt(id: id, name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
+        }
+    }
+    
+    // Backward compatibility method
     func updatePrompt(id: UUID, name: String, content: String) {
         if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
-            savedPrompts[index] = SavedPrompt(id: id, name: name, content: content)
+            // Preserve the existing userPrompt if there is one
+            let existingUserPrompt = savedPrompts[index].userPrompt
+            savedPrompts[index] = SavedPrompt(id: id, name: name, systemPrompt: content, userPrompt: existingUserPrompt)
         }
     }
     
@@ -187,7 +376,15 @@ class AppStorageManager: ObservableObject {
     
     func selectPrompt(id: UUID) {
         if let selectedPrompt = savedPrompts.first(where: { $0.id == id }) {
-            prompt = selectedPrompt.content
+            systemPrompt = selectedPrompt.systemPrompt
+            userPrompt = selectedPrompt.userPrompt
+        }
+    }
+    
+    func setDefaultPrompt(id: UUID) {
+        if savedPrompts.contains(where: { $0.id == id }) {
+            defaultPromptID = id
+            objectWillChange.send()
         }
     }
     
@@ -238,6 +435,10 @@ class AppStorageManager: ObservableObject {
                 } else {
                     print("No API token found for endpoint \(selectedEndpoint.name)")
                 }
+            } else {
+                // Clear the API token if the endpoint doesn't require auth
+                apiToken = ""
+                print("Cleared API token for endpoint \(selectedEndpoint.name) as it doesn't require auth")
             }
             
             // Ensure the changes are immediately applied
@@ -265,6 +466,29 @@ class AppStorageManager: ObservableObject {
         savedEndpoints.move(fromOffsets: source, toOffset: destination)
         saveEndpoints()
         // Notify observers that endpoints have changed
+        objectWillChange.send()
+    }
+    
+    // Save API token for a specific endpoint
+    func saveAPIToken(for endpointID: UUID, token: String) {
+        // Store the token in the endpoint tokens dictionary
+        endpointTokens[endpointID.uuidString] = token
+        
+        // If this is the currently selected endpoint, also update the current token
+        if let selectedEndpoint = savedEndpoints.first(where: { $0.id == endpointID }),
+           selectedEndpoint.url == apiEndpoint {
+            apiToken = token
+            // Ensure the token is saved to UserDefaults
+            UserDefaults.standard.set(token, forKey: "apiToken")
+            print("Updated current API token: \(token.prefix(5))...\(token.suffix(5))")
+        }
+        
+        // Ensure the changes are immediately applied
+        if let encoded = try? JSONEncoder().encode(endpointTokens) {
+            UserDefaults.standard.set(encoded, forKey: "endpointTokens")
+        }
+        
+        // Notify observers that the token has changed
         objectWillChange.send()
     }
 }

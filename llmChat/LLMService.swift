@@ -39,7 +39,8 @@ class LLMService: NSObject, URLSessionDataDelegate {
     
     static func sendStreamingMessage(
         message: String,
-        prompt: String,
+        systemPrompt: String,
+        userPrompt: String = "",
         model: String,
         apiToken: String,
         endpoint: String,
@@ -53,7 +54,8 @@ class LLMService: NSObject, URLSessionDataDelegate {
         service.onUpdate = onUpdate
         service.startStreaming(
             message: message,
-            prompt: prompt,
+            systemPrompt: systemPrompt,
+            userPrompt: userPrompt,
             model: model,
             apiToken: apiToken,
             endpoint: endpoint,
@@ -70,7 +72,8 @@ class LLMService: NSObject, URLSessionDataDelegate {
     
     private func startStreaming(
         message: String,
-        prompt: String,
+        systemPrompt: String,
+        userPrompt: String = "",
         model: String,
         apiToken: String,
         endpoint: String,
@@ -117,10 +120,14 @@ class LLMService: NSObject, URLSessionDataDelegate {
         sessionConfig.timeoutIntervalForResource = 300.0
         
         
-        // Use the provided prompt if available, otherwise use a default system prompt
-        let systemPrompt = !prompt.isEmpty ? prompt : 
-            (preferredLanguage == "English" ? "You are a helpful assistant." :
-            "You are a helpful assistant. Respond in \(preferredLanguage) unless the user specifies otherwise.")
+        // Use the provided system prompt if available, otherwise use a default system prompt
+        var finalSystemPrompt = !systemPrompt.isEmpty ? systemPrompt : "You are a helpful assistant."
+        
+        // If a language other than English is selected, enforce strict language response
+        if preferredLanguage != "English" {
+            // Add strict language instruction to ensure the model only responds in the selected language
+            finalSystemPrompt += "\n\nYou MUST ONLY and ALWAYS respond in \(preferredLanguage), regardless of the language the user uses to communicate with you. NEVER respond in any other language under any circumstances."
+        }
         
         // Get max tokens for the model
         let maxTokens = LLMService.getMaxTokensForModel(model)
@@ -129,11 +136,11 @@ class LLMService: NSObject, URLSessionDataDelegate {
         let json: [String: Any]
         if useChatEndpoint {
             // Process conversation history with context window management
-            var messages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+            var messages: [[String: Any]] = [["role": "system", "content": finalSystemPrompt]]
             
             // Add conversation history if available
             if !conversationHistory.isEmpty {
-                let processedHistory = processConversationHistory(conversationHistory, maxTokens: maxTokens, systemPrompt: systemPrompt)
+                let processedHistory = processConversationHistory(conversationHistory, maxTokens: maxTokens, systemPrompt: finalSystemPrompt)
                 
                 // Add processed history messages
                 for historyMessage in processedHistory {
@@ -158,11 +165,15 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 }
                 
                 if !messageExists {
-                    messages.append(["role": "user", "content": message])
+                    // If we have a user prompt, prepend it to the message
+                    let finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                    messages.append(["role": "user", "content": finalUserMessage])
                 }
             } else {
                 // Just add the current message if no history
-                messages.append(["role": "user", "content": message])
+                // If we have a user prompt, prepend it to the message
+                let finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                messages.append(["role": "user", "content": finalUserMessage])
             }
             
             json = [
@@ -172,9 +183,18 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 "stream": true
             ]
         } else {
+            // For non-chat endpoints, combine system prompt, user prompt, and message
+            var fullPrompt = finalSystemPrompt
+            
+            if !userPrompt.isEmpty {
+                fullPrompt += "\n\n" + userPrompt
+            }
+            
+            fullPrompt += "\n\n" + message
+            
             json = [
                 "model": model,
-                "prompt": prompt,
+                "prompt": fullPrompt,
                 "temperature": temperature,
                 "stream": true
             ]
@@ -194,10 +214,12 @@ class LLMService: NSObject, URLSessionDataDelegate {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         // Add authorization header if API token is available
-        if !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let token = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            print("Using API token: \(token.prefix(5))...\(token.suffix(5))")
+        print("API token received by LLMService: \(apiToken.isEmpty ? "EMPTY" : "\(apiToken.prefix(min(5, apiToken.count)))...")")
+        
+        let trimmedToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedToken.isEmpty {
+            request.setValue("Bearer \(trimmedToken)", forHTTPHeaderField: "Authorization")
+            print("Using API token: \(trimmedToken.prefix(min(5, trimmedToken.count)))...\(trimmedToken.suffix(min(5, trimmedToken.count)))")
         } else {
             print("WARNING: No API token provided for request to \(url.absoluteString)")
         }
@@ -345,6 +367,8 @@ class LLMService: NSObject, URLSessionDataDelegate {
         apiToken: String,
         endpoint: String,
         model: String,
+        systemPrompt: String = "",
+        userPrompt: String = "",
         completion: @escaping (String) -> Void
     ) {
         // Create a conversation transcript for the LLM to summarize
@@ -395,11 +419,21 @@ class LLMService: NSObject, URLSessionDataDelegate {
             return
         }
         
+        // Use custom system prompt if provided, otherwise use the default title generation prompt
+        let titleSystemPrompt = !systemPrompt.isEmpty 
+            ? systemPrompt 
+            : "You are a helpful assistant that generates short, concise titles (5 words max) for chat conversations. The title should capture the main topic or question."
+        
+        // Prepare user content, incorporating custom user prompt if provided
+        let userContent = !userPrompt.isEmpty 
+            ? "\(userPrompt)\n\nPlease create a short, concise title (5 words max) for this conversation:\n\n\(transcript)" 
+            : "Please create a short, concise title (5 words max) for this conversation:\n\n\(transcript)"
+        
         let json: [String: Any] = [
             "model": model,
             "messages": [
-                ["role": "system", "content": "You are a helpful assistant that generates short, concise titles (5 words max) for chat conversations. The title should capture the main topic or question."],
-                ["role": "user", "content": "Please create a short, concise title (5 words max) for this conversation:\n\n\(transcript)"]
+                ["role": "system", "content": titleSystemPrompt],
+                ["role": "user", "content": userContent]
             ],
             "max_tokens": 20
         ]

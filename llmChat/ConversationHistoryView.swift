@@ -22,10 +22,20 @@ struct ConversationHistoryView: View {
                         .font(.headline)
                         .foregroundColor(.primary)
                     
-                    // Display model as secondary information
-                    Text("Model: \(conversation.model ?? "Unknown")")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                    // Display model and prompt information as secondary information
+                    HStack {
+                        Text("Model: \(conversation.model ?? "Unknown")")
+                        
+                        if conversation.userPrompt != nil {
+                            Text("•")
+                            Text("System + User Prompts")
+                        } else {
+                            Text("•")
+                            Text("System Prompt")
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
                     
                     // Display date at the bottom
                     Text(conversation.timestamp?.formatted() ?? "Unknown date")
@@ -42,11 +52,19 @@ struct ConversationHistoryView: View {
             .onDelete(perform: deleteConversation)
         }
         .onAppear(perform: loadConversations)
+        .onDisappear {
+            // Force a refresh when view appears again
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                loadConversations()
+            }
+        }
         .navigationTitle("Conversation History")
     }
 
     private func loadConversations() {
+        print("Loading conversations from Core Data")
         conversations = CoreDataManager.shared.fetchConversations()
+        print("Loaded \(conversations.count) conversations")
     }
 
     private func deleteConversation(at offsets: IndexSet) {

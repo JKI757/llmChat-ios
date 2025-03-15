@@ -103,10 +103,35 @@ struct SettingsView: View {
             
             // Model Selection section removed as it's now integrated in the API Configuration section
             
-            Section(header: Text("Default Prompt")) {
-                // Display current prompt in a text editor
-                TextEditor(text: $storage.prompt)
-                    .frame(minHeight: 100)
+            Section(header: Text("Default Prompts")) {
+                // System Prompt section
+                VStack(alignment: .leading) {
+                    Text("System Prompt")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    TextEditor(text: $storage.systemPrompt)
+                        .frame(minHeight: 100)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                }
+                .padding(.bottom, 8)
+                
+                // User Prompt section
+                VStack(alignment: .leading) {
+                    Text("User Prompt (Optional)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    TextEditor(text: $storage.userPrompt)
+                        .frame(minHeight: 80)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                }
                 
                 // Prompt selection menu
                 if !storage.savedPrompts.isEmpty {

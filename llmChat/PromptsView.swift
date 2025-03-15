@@ -6,48 +6,36 @@ struct PromptsView: View {
     @State private var isEditingPrompt = false
     @State private var editingPromptID: UUID?
     @State private var promptName = ""
-    @State private var promptContent = ""
+    @State private var systemPrompt = ""
+    @State private var userPrompt = ""
     
     var body: some View {
         List {
             ForEach(storage.savedPrompts) { prompt in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(prompt.name)
-                        .font(.headline)
-                    
-                    Text(prompt.content)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                }
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    // Select this prompt and update the current prompt
-                    storage.selectPrompt(id: prompt.id)
-                    // Show a confirmation
-                    let generator = UINotificationFeedbackGenerator()
-                    generator.notificationOccurred(.success)
-                }
-                .contextMenu {
-                    Button(action: {
-                        editingPromptID = prompt.id
-                        promptName = prompt.name
-                        promptContent = prompt.content
-                        isEditingPrompt = true
-                    }) {
-                        Label("Edit", systemImage: "pencil")
+                promptRowView(for: prompt)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Select the prompt when tapped
+                        storage.selectPrompt(id: prompt.id)
+                        let generator = UINotificationFeedbackGenerator()
+                        generator.notificationOccurred(.success)
                     }
-                }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            deletePrompt(prompt)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
             }
-            .onDelete(perform: storage.deletePrompt)
         }
         .navigationTitle("Prompt Library")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button(action: {
                     promptName = ""
-                    promptContent = ""
+                    systemPrompt = ""
+                    userPrompt = ""
                     isAddingPrompt = true
                 }) {
                     Image(systemName: "plus")
@@ -55,47 +43,185 @@ struct PromptsView: View {
             }
         }
         .sheet(isPresented: $isAddingPrompt) {
-            promptEditorView(title: "Add New Prompt", buttonTitle: "Add") {
-                storage.addPrompt(name: promptName, content: promptContent)
-                isAddingPrompt = false
-            }
+            addPromptView()
         }
         .sheet(isPresented: $isEditingPrompt) {
-            promptEditorView(title: "Edit Prompt", buttonTitle: "Save") {
-                if let id = editingPromptID {
-                    storage.updatePrompt(id: id, name: promptName, content: promptContent)
+            editPromptView()
+        }
+    }
+    
+    // MARK: - Helper Views
+    
+    private func promptRowView(for prompt: SavedPrompt) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(prompt.name)
+                        .font(.headline)
+                    
+                    // Show a subtle indicator for the currently selected prompt
+                    if isCurrentlySelected(prompt) {
+                        Text("(Active)")
+                            .font(.caption)
+                            .foregroundColor(.accentColor)
+                            .padding(.leading, 4)
+                    }
                 }
-                isEditingPrompt = false
+                
+                Text("System: " + prompt.systemPrompt.prefix(60))
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                
+                if !prompt.userPrompt.isEmpty {
+                    Text("User: " + prompt.userPrompt.prefix(60))
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            HStack(spacing: 12) {
+                // Edit button
+                Button(action: {
+                    prepareForEditing(prompt)
+                }) {
+                    Image(systemName: "pencil")
+                        .foregroundColor(.blue)
+                        .font(.title3)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                
+                // Star button for setting default prompt
+                Button(action: {
+                    storage.setDefaultPrompt(id: prompt.id)
+                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                    generator.impactOccurred()
+                }) {
+                    Image(systemName: storage.defaultPromptID == prompt.id ? "star.fill" : "star")
+                        .foregroundColor(.yellow)
+                        .font(.title3)
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }
+        }
+        .padding(.vertical, 4)
+        .background(
+            isCurrentlySelected(prompt) ? 
+                Color.accentColor.opacity(0.1) : 
+                Color.clear
+        )
+        .cornerRadius(8)
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                deletePrompt(prompt)
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
     
-    private func promptEditorView(title: String, buttonTitle: String, action: @escaping () -> Void) -> some View {
+    // Helper method to check if a prompt is currently selected
+    private func isCurrentlySelected(_ prompt: SavedPrompt) -> Bool {
+        return storage.systemPrompt == prompt.systemPrompt &&
+               storage.userPrompt == prompt.userPrompt
+    }
+    
+    private func addPromptView() -> some View {
         NavigationView {
             Form {
-                Section(header: Text("Prompt Details")) {
+                Section(header: Text("Prompt Nickname"), footer: Text("A short, descriptive name for this prompt")) {
                     TextField("Name", text: $promptName)
-                    
-                    TextEditor(text: $promptContent)
-                        .frame(minHeight: 150)
+                }
+                
+                Section(header: Text("System Prompt"), footer: Text("Instructions that define the assistant's behavior")) {
+                    TextEditor(text: $systemPrompt)
+                        .frame(minHeight: 100)
+                }
+                
+                Section(header: Text("User Prompt (Optional)"), footer: Text("Text that will be prepended to your messages")) {
+                    TextEditor(text: $userPrompt)
+                        .frame(minHeight: 100)
                 }
             }
-            .navigationTitle(title)
+            .navigationTitle("Add New Prompt")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
                         isAddingPrompt = false
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Add") {
+                        saveNewPrompt()
+                    }
+                    .disabled(promptName.isEmpty || systemPrompt.isEmpty)
+                }
+            }
+        }
+    }
+    
+    private func editPromptView() -> some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Prompt Nickname"), footer: Text("A short, descriptive name for this prompt")) {
+                    TextField("Name", text: $promptName)
+                }
+                
+                Section(header: Text("System Prompt"), footer: Text("Instructions that define the assistant's behavior")) {
+                    TextEditor(text: $systemPrompt)
+                        .frame(minHeight: 100)
+                }
+                
+                Section(header: Text("User Prompt (Optional)"), footer: Text("Text that will be prepended to your messages")) {
+                    TextEditor(text: $userPrompt)
+                        .frame(minHeight: 100)
+                }
+            }
+            .navigationTitle("Edit Prompt")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
                         isEditingPrompt = false
                     }
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(buttonTitle) {
-                        action()
+                    Button("Save") {
+                        saveEditedPrompt()
                     }
-                    .disabled(promptName.isEmpty || promptContent.isEmpty)
+                    .disabled(promptName.isEmpty || systemPrompt.isEmpty)
                 }
             }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func prepareForEditing(_ prompt: SavedPrompt) {
+        editingPromptID = prompt.id
+        promptName = prompt.name
+        systemPrompt = prompt.systemPrompt
+        userPrompt = prompt.userPrompt
+        isEditingPrompt = true
+    }
+    
+    private func saveNewPrompt() {
+        storage.addPrompt(name: promptName, systemPrompt: systemPrompt, userPrompt: userPrompt)
+        isAddingPrompt = false
+    }
+    
+    private func saveEditedPrompt() {
+        if let id = editingPromptID {
+            storage.updatePrompt(id: id, name: promptName, systemPrompt: systemPrompt, userPrompt: userPrompt)
+        }
+        isEditingPrompt = false
+    }
+    
+    private func deletePrompt(_ prompt: SavedPrompt) {
+        if let index = storage.savedPrompts.firstIndex(where: { $0.id == prompt.id }) {
+            storage.deletePrompt(at: IndexSet(integer: index))
         }
     }
 }

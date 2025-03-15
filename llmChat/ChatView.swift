@@ -126,7 +126,7 @@ struct ChatView: View {
     @State private var contextUsagePercent: Double = 0  // Track context window usage
     @State private var selectedItem: PhotosPickerItem? = nil
     @State private var selectedImageData: Data? = nil
-    let models = ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo"]
+    @State private var isCheckingEndpoint: Bool = false  // Track if we're currently checking the endpoint
     let languages = ["English", "Spanish", "French", "German", "Chinese", "Japanese", "Tagalog"]
     
     var body: some View {
@@ -162,7 +162,33 @@ struct ChatView: View {
                         }
                     }
                 }
-                inputArea
+                // Text input field and send button
+                HStack {
+                    TextField("Type a message...", text: $inputText, onCommit: {
+                        if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
+                            sendMessage()
+                        }
+                    })
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .disabled(isStreaming)
+                    
+                    if isStreaming {
+                        Button(action: stopStreaming) {
+                            Image(systemName: "stop.fill")
+                                .foregroundColor(.red)
+                                .padding(8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.gray.opacity(0.2))
+                    } else {
+                        Button(action: sendMessage) {
+                            Image(systemName: "paperplane.fill")
+                                .padding(8)
+                        }
+                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding(.horizontal)
                 
                 // Context window usage indicator
                 VStack(alignment: .leading, spacing: 4) {
@@ -198,8 +224,18 @@ struct ChatView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
+                
+                // Parameter selectors - now below the text entry and context display
+                parameterSelectors
+                
+                // Add the hidden image picker
+                hiddenImagePicker
             }
             .navigationTitle("Chat")
+            .onAppear {
+                // Check if we have a valid endpoint and fetch available models
+                checkEndpoint()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     NavigationLink(destination: SettingsView()) {
@@ -229,101 +265,206 @@ struct ChatView: View {
             }
         }
     }
-    // Update the inputArea to make the stop button more visible
-var inputArea: some View {
+    // Parameter selectors view - now a separate component
+var parameterSelectors: some View {
     VStack(spacing: 8) {
-        // Model and language selection row
-        HStack {
-            // Model indicator and picker
-            HStack(spacing: 4) {
-                Image(systemName: "cpu")
-                    .font(.caption)
-                Text(storage.preferredModel)
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.blue.opacity(0.1))
-            .cornerRadius(8)
-            
-            // Temperature indicator
-            HStack(spacing: 4) {
-                Image(systemName: "thermometer")
-                    .font(.caption)
-                Text("\(storage.temperature, specifier: "%.1f")")
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.orange.opacity(0.1))
-            .cornerRadius(8)
-            
-            Spacer()
-            
-            // Language picker
-            Picker("Language", selection: $selectedLanguage) {
-                ForEach(languages, id: \.self) { language in
-                    Text(language)
-                }
-            }
-            .pickerStyle(MenuPickerStyle())
-            .disabled(isStreaming)
-        }
-        .padding(.horizontal)
-        
-        // Input field, image picker and send button
-        HStack {
-            // Image picker button
-            PhotosPicker(
-                selection: $selectedItem,
-                matching: .images,
-                photoLibrary: .shared()) {
-                    Image(systemName: "photo")
-                        .foregroundColor(.blue)
-                        .padding(8)
-                }
-                .disabled(isStreaming)
-                .onChange(of: selectedItem) { newItem in
-                    Task {
-                        if let data = try? await newItem?.loadTransferable(type: Data.self) {
-                            selectedImageData = data
-                            // Send the image message immediately
-                            sendImageMessage(imageData: data)
+        // Double-stacked parameter selectors
+        VStack(spacing: 8) {
+            // Top row: Prompt and Model selectors
+            HStack(spacing: 12) {
+                // Prompt selector
+                Menu {
+                    ForEach(storage.savedPrompts) { prompt in
+                        Button(action: {
+                            storage.selectPrompt(id: prompt.id)
+                        }) {
+                            HStack {
+                                Text(prompt.name)
+                                if isCurrentPromptSelected(prompt) {
+                                    Image(systemName: "checkmark")
+                                }
+                                if storage.defaultPromptID == prompt.id {
+                                    Image(systemName: "star.fill")
+                                        .foregroundColor(.yellow)
+                                }
+                            }
                         }
                     }
+                    
+                    Divider()
+                    
+                    NavigationLink(destination: PromptsView()) {
+                        Label("Manage Prompts", systemImage: "gear")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "text.bubble")
+                            .font(.caption)
+                        Text(getCurrentPromptName())
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.purple.opacity(0.1))
+                    .cornerRadius(8)
                 }
-            
-            TextField("Type a message...", text: $inputText, onCommit: {
-                if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
-                    sendMessage()
+                .disabled(isStreaming)
+                .frame(maxWidth: .infinity)
+                
+                // Model selector
+                Menu {
+                    if isCheckingEndpoint {
+                        Text("Checking endpoint...")
+                            .foregroundColor(.secondary)
+                    } else if !storage.hasValidEndpoint {
+                        Text("No valid endpoint")
+                            .foregroundColor(.secondary)
+                        
+                        Divider()
+                        
+                        NavigationLink(destination: SettingsView()) {
+                            Label("Configure Endpoint", systemImage: "gear")
+                        }
+                    } else if storage.availableModels.isEmpty {
+                        Text("No models available")
+                            .foregroundColor(.secondary)
+                        
+                        Divider()
+                        
+                        NavigationLink(destination: SettingsView()) {
+                            Label("Configure Endpoint", systemImage: "gear")
+                        }
+                    } else {
+                        // Show all available models from the endpoint
+                        ForEach(storage.availableModels, id: \.self) { model in
+                            Button(action: { storage.preferredModel = model }) {
+                                HStack {
+                                    Text(model)
+                                    if storage.preferredModel == model {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "cpu")
+                            .font(.caption)
+                        Text(storage.preferredModel)
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(8)
                 }
-            })
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .disabled(isStreaming)
-            
-            if isStreaming {
-                Button(action: stopStreaming) {
-                    Image(systemName: "stop.fill")
-                        .foregroundColor(.red)
-                        .padding(8)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.gray.opacity(0.2))
-            } else {
-                Button(action: sendMessage) {
-                    Image(systemName: "paperplane.fill")
-                        .padding(8)
-                }
-                .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(isStreaming)
+                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal)
+            
+            // Bottom row: Temperature and Language selectors
+            HStack(spacing: 12) {
+                // Temperature selector
+                Menu {
+                    Button(action: { storage.temperature = 0.0 }) {
+                        HStack {
+                            Text("0.0 - Precise")
+                            if storage.temperature == 0.0 {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    
+                    Button(action: { storage.temperature = 0.3 }) {
+                        HStack {
+                            Text("0.3 - Balanced")
+                            if storage.temperature == 0.3 {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    
+                    Button(action: { storage.temperature = 0.7 }) {
+                        HStack {
+                            Text("0.7 - Creative")
+                            if storage.temperature == 0.7 {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    
+                    Button(action: { storage.temperature = 1.0 }) {
+                        HStack {
+                            Text("1.0 - Very Creative")
+                            if storage.temperature == 1.0 {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "thermometer")
+                            .font(.caption)
+                        Text("\(storage.temperature, specifier: "%.1f")")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+                .disabled(isStreaming)
+                .frame(maxWidth: .infinity)
+                
+                // Language picker
+                Picker("Language", selection: $selectedLanguage) {
+                    ForEach(languages, id: \.self) { language in
+                        Text(language)
+                    }
+                }
+                .pickerStyle(MenuPickerStyle())
+                .disabled(isStreaming)
+                .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal)
         }
-        .padding(.horizontal)
     }
     .padding(.vertical, 8)
+    .background(Color(.systemGray6).opacity(0.5))
 }
 
+// Hidden image picker that can still be triggered programmatically but isn't visible in the UI
+var hiddenImagePicker: some View {
+    PhotosPicker(
+        selection: $selectedItem,
+        matching: .images,
+        photoLibrary: .shared()) {
+            EmptyView() // No visible UI element
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .disabled(isStreaming)
+        .onChange(of: selectedItem) { newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                    selectedImageData = data
+                    // Send the image message immediately
+                    sendImageMessage(imageData: data)
+                }
+            }
+        }
+}
 
 // Update sendMessage function to handle streaming properly
 private func sendMessage() {
@@ -355,10 +496,14 @@ private func sendMessage() {
     // Calculate context usage before sending
     updateContextUsage()
     
+    // Debug the API token before sending
+    print("API token in ChatView: \(storage.apiToken.isEmpty ? "EMPTY" : "\(storage.apiToken.prefix(min(5, storage.apiToken.count)))...")")
+    
     // Sending message using LLMService with conversation history
     currentService = LLMService.sendStreamingMessage(
         message: messageSent,
-        prompt: storage.prompt,
+        systemPrompt: storage.systemPrompt,
+        userPrompt: storage.userPrompt,
         model: storage.preferredModel,
         apiToken: storage.apiToken,
         endpoint: storage.apiEndpoint,
@@ -391,20 +536,27 @@ private func sendMessage() {
                     currentDelta = ""
                     
                     // Save and update the current conversation ID if needed
-                    let savedID = CoreDataManager.shared.saveConversation(
-                        model: storage.preferredModel,
-                        prompt: storage.prompt,
-                        language: selectedLanguage,
-                        messages: messages,
-                        apiToken: storage.apiToken,
-                        apiEndpoint: storage.apiEndpoint,
-                        conversationID: currentConversationID
-                    )
-                    
-                    // Update the conversation ID for future saves
-                    if currentConversationID == nil {
-                        currentConversationID = savedID
+                    do {
+                        let savedID = try CoreDataManager.shared.saveConversation(
+                            model: storage.preferredModel,
+                            systemPrompt: storage.systemPrompt,
+                            userPrompt: storage.userPrompt,
+                            language: selectedLanguage,
+                            messages: messages,
+                            apiToken: storage.apiToken,
+                            apiEndpoint: storage.apiEndpoint,
+                            conversationID: currentConversationID
+                        )
+                        
+                        // Update the conversation ID for future saves
+                        if currentConversationID == nil {
+                            currentConversationID = savedID
+                        }
+                    } catch {
+                        print("Failed to save conversation: \(error)")
                     }
+                    
+
                 } else {
                     // Handle different response formats
                     if chunk.hasPrefix("data: ") {
@@ -531,25 +683,53 @@ private func sendMessage() {
             messages.append(ChatMessage(text: currentDelta + "\n\n[Response interrupted]", isUser: false))
             
             // Save the conversation even if interrupted
-            let savedID = CoreDataManager.shared.saveConversation(
-                model: storage.preferredModel,
-                prompt: storage.prompt,
-                language: selectedLanguage,
-                messages: messages,
-                apiToken: storage.apiToken,
-                apiEndpoint: storage.apiEndpoint,
-                conversationID: currentConversationID
-            )
-            
-            // Update the conversation ID for future saves
-            if currentConversationID == nil {
-                currentConversationID = savedID
+            do {
+                let savedID = try CoreDataManager.shared.saveConversation(
+                    model: storage.preferredModel,
+                    systemPrompt: storage.systemPrompt,
+                    userPrompt: storage.userPrompt,
+                    language: selectedLanguage,
+                    messages: messages,
+                    apiToken: storage.apiToken,
+                    apiEndpoint: storage.apiEndpoint
+                )
+                
+                if let id = savedID {
+                    currentConversationID = id
+                }
+            } catch {
+                print("Failed to save interrupted conversation: \(error)")
             }
         }
         
+        // Reset streaming state
         streamingMessage = ""
         currentDelta = ""
-        currentService = nil
+    }
+    
+    private func checkEndpoint() {
+        // Don't check if we're already checking
+        guard !isCheckingEndpoint else { return }
+        
+        // Don't check if there's no endpoint configured
+        guard !storage.apiEndpoint.isEmpty else {
+            storage.hasValidEndpoint = false
+            storage.availableModels = []
+            return
+        }
+        
+        isCheckingEndpoint = true
+        
+        // Call the AppStorageManager method to check the endpoint and fetch models
+        storage.checkEndpointAndFetchModels { success in
+            self.isCheckingEndpoint = false
+            
+            if success {
+                print("Endpoint validation successful. Found \(storage.availableModels.count) models.")
+            } else {
+                print("Endpoint validation failed. No valid models found.")
+            }
+        }
     }
     // Moved helper function inside the struct.
     private func loadConversation(_ conversation: Conversation) {
@@ -557,7 +737,13 @@ private func sendMessage() {
            let savedMessages = try? JSONDecoder().decode([ChatMessage].self, from: data) {
             messages = savedMessages
             storage.preferredModel = conversation.model ?? "gpt-4"
-            storage.prompt = conversation.prompt ?? "You are a helpful assistant."
+            
+            // Load system prompt
+            storage.systemPrompt = conversation.systemPrompt ?? "You are a helpful assistant."
+            
+            // Load user prompt if available
+            storage.userPrompt = conversation.userPrompt ?? ""
+            
             selectedLanguage = conversation.language ?? "English"
             currentConversationID = conversation.id  // Set current conversation ID when loading
         }
@@ -583,7 +769,12 @@ private func sendMessage() {
         let maxTokens = LLMService.getMaxTokensForModel(storage.preferredModel)
         
         // Calculate total tokens in the conversation
-        var totalTokens = LLMService.estimateTokens(in: storage.prompt) // System prompt
+        var totalTokens = LLMService.estimateTokens(in: storage.systemPrompt) // System prompt
+        
+        // Add user prompt tokens if present
+        if !storage.userPrompt.isEmpty {
+            totalTokens += LLMService.estimateTokens(in: storage.userPrompt)
+        }
         
         for message in messages {
             switch message.content {
@@ -610,15 +801,24 @@ private func sendMessage() {
     private func newConversation() {
         // Save current conversation if it has content
         if !messages.isEmpty {
-            CoreDataManager.shared.saveConversation(
-                model: storage.preferredModel,
-                prompt: storage.prompt,
-                language: selectedLanguage,
-                messages: messages,
-                apiToken: storage.apiToken,
-                apiEndpoint: storage.apiEndpoint,
-                conversationID: currentConversationID
-            )
+            // Make sure we have a valid endpoint before trying to save
+            let endpoint = storage.hasValidEndpoint ? storage.apiEndpoint : ""
+            
+            do {
+                let savedID = try CoreDataManager.shared.saveConversation(
+                    model: storage.preferredModel,
+                    systemPrompt: storage.systemPrompt,
+                    userPrompt: storage.userPrompt,
+                    language: selectedLanguage,
+                    messages: messages,
+                    apiToken: storage.apiToken,
+                    apiEndpoint: endpoint,
+                    conversationID: currentConversationID
+                )
+                print("Successfully saved conversation with ID: \(String(describing: savedID))")
+            } catch {
+                print("Failed to save conversation: \(error)")
+            }
         }
         
         // Reset the conversation ID for a truly new conversation
@@ -647,6 +847,22 @@ private func sendMessage() {
         // Optionally, you could automatically send a message to the LLM here
         // asking it to describe the image, but that would require vision capabilities
         // in the model, which may not be available in all endpoints
+    }
+    
+    // MARK: - Prompt Selector Helpers
+    
+    // Helper method to check if a prompt is currently selected
+    private func isCurrentPromptSelected(_ prompt: SavedPrompt) -> Bool {
+        return storage.systemPrompt == prompt.systemPrompt && 
+               storage.userPrompt == prompt.userPrompt
+    }
+    
+    // Helper method to get the name of the currently selected prompt
+    private func getCurrentPromptName() -> String {
+        if let currentPrompt = storage.savedPrompts.first(where: { isCurrentPromptSelected($0) }) {
+            return currentPrompt.name
+        }
+        return "Custom Prompt"
     }
 }
 

@@ -186,10 +186,8 @@ struct EndpointsView: View {
                         temperature: temperature
                     )
                     
-                    // Store the API token for this endpoint
-                    var tokens = getEndpointTokens()
-                    tokens[newEndpointID.uuidString] = tempApiToken
-                    saveEndpointTokens(tokens)
+                    // Store the API token for this endpoint using the new method
+                    storage.saveAPIToken(for: newEndpointID, token: tempApiToken)
                     
                     // Debug logging
                     print("Saved API token for new endpoint \(endpointName): \(tempApiToken.prefix(5))...\(tempApiToken.suffix(5))")
@@ -227,15 +225,14 @@ struct EndpointsView: View {
                     
                     // Save the API token if authentication is required
                     if requiresAuth {
-                        var tokens = getEndpointTokens()
                         if !tempApiToken.isEmpty {
-                            tokens[id.uuidString] = tempApiToken
+                            storage.saveAPIToken(for: id, token: tempApiToken)
                             print("Updated API token for endpoint \(endpointName): \(tempApiToken.prefix(5))...\(tempApiToken.suffix(5))")
                         } else {
-                            tokens.removeValue(forKey: id.uuidString)
+                            // For empty tokens, still save it (which effectively clears it)
+                            storage.saveAPIToken(for: id, token: "")
                             print("Removed API token for endpoint \(endpointName)")
                         }
-                        saveEndpointTokens(tokens)
                     }
                     
                     // Re-select the endpoint to apply any changes

@@ -7,11 +7,42 @@ class CoreDataManager {
     
     private init() {
         container = NSPersistentContainer(name: "ChatHistory")
-        container.loadPersistentStores { storeDescription, error in
-            if let error = error as NSError? {
-                print("Failed to load Core Data: \(error), \(error.userInfo)")
-            }
+        
+        // Add options to handle migration failures more gracefully
+        container.persistentStoreDescriptions.forEach { description in
+            description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+            description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
         }
+        
+        container.loadPersistentStores(completionHandler: { (storeDescription, error) in
+            if let error = error as NSError? {
+                // Handle the error
+                print("Failed to load Core Data: \(error), \(error.userInfo)")
+                
+                // If there's a store URL, try to remove it and recreate
+                if let storeURL = storeDescription.url {
+                    do {
+                        try FileManager.default.removeItem(at: storeURL)
+                        print("Removed corrupted store at \(storeURL)")
+                        
+                        // Try to load again with the store removed
+                        self.container.loadPersistentStores(completionHandler: { (_, loadError) in
+                            if let loadError = loadError {
+                                print("Still failed to load after removing store: \(loadError)")
+                            } else {
+                                print("Successfully reloaded store after removing corrupted one")
+                            }
+                        })
+                    } catch {
+                        print("Failed to remove corrupted store: \(error)")
+                    }
+                }
+            }
+        })
+        
+        // Configure the context to merge policy that favors in-memory changes
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        container.viewContext.automaticallyMergesChangesFromParent = true
     }
     
     var context: NSManagedObjectContext {
@@ -19,7 +50,9 @@ class CoreDataManager {
     }
 
     @discardableResult
-    func saveConversation(model: String, prompt: String, language: String, messages: [ChatMessage], apiToken: String = "", apiEndpoint: String = "", conversationID: UUID? = nil) -> UUID? {
+    func saveConversation(model: String, systemPrompt: String, userPrompt: String = "", language: String, messages: [ChatMessage], apiToken: String = "", apiEndpoint: String = "", conversationID: UUID? = nil) throws -> UUID? {
+        // For backward compatibility
+        let prompt = systemPrompt
         // Check if we're updating an existing conversation or creating a new one
         let conversation: Conversation
         let isNewConversation: Bool
@@ -61,8 +94,12 @@ class CoreDataManager {
         // Always update timestamp when saving
         conversation.timestamp = Date()
         conversation.model = model
-        conversation.prompt = prompt
+        conversation.systemPrompt = systemPrompt
         conversation.language = language
+        
+        // Store system prompt and user prompt separately
+        conversation.systemPrompt = systemPrompt
+        conversation.userPrompt = userPrompt.isEmpty ? nil : userPrompt
         
         if let encodedMessages = try? JSONEncoder().encode(messages) {
             conversation.messages = encodedMessages
@@ -73,8 +110,10 @@ class CoreDataManager {
         // Save immediately
         do {
             try context.save()
+            print("Successfully saved conversation to Core Data")
         } catch {
             print("Failed to save conversation: \(error)")
+            throw error
         }
         
         // Only generate a new title if this is a new conversation or if we have a significant update
@@ -87,7 +126,9 @@ class CoreDataManager {
                 messages: messages,
                 apiToken: apiToken,
                 endpoint: apiEndpoint,
-                model: model
+                model: model,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt
             ) { [weak self] title in
                 guard let self = self else { return }
                 
@@ -106,8 +147,13 @@ class CoreDataManager {
         let request: NSFetchRequest<Conversation> = Conversation.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
         
+        // Ensure we're getting fresh data
+        context.refreshAllObjects()
+        
         do {
-            return try context.fetch(request)
+            let results = try context.fetch(request)
+            print("Fetched \(results.count) conversations from Core Data")
+            return results
         } catch {
             print("Failed to fetch conversations: \(error)")
             return []
