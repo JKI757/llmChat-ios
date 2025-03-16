@@ -9,20 +9,21 @@ struct MainView: View {
         ChatView()
             .environmentObject(storage)
         #else
-        // macOS layout - use a horizontal split with chat taking more space
-        HStack(spacing: 0) {
-            // Chat view takes 70% of the space
-            ChatView()
-                .environmentObject(storage)
-                .frame(minWidth: 0, maxWidth: .infinity)
-            
-            // Settings view takes 30% of the space
-            NavigationView {
-                SettingsView()
+        // macOS layout - use a horizontal split with chat taking 2/3 of the space
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                // Chat view takes 2/3 of the space
+                ChatView()
                     .environmentObject(storage)
-                    .frame(width: 350)
+                    .frame(width: geometry.size.width * 0.67)
+                
+                // Settings view takes 1/3 of the space
+                NavigationView {
+                    SettingsView()
+                        .environmentObject(storage)
+                }
+                .frame(width: geometry.size.width * 0.33)
             }
-            .frame(width: 350)
         }
         #endif
     }
