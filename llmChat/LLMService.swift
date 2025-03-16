@@ -5,6 +5,7 @@ class LLMService: NSObject, URLSessionDataDelegate {
     private var onUpdate: ((String, Bool) -> Void)?
     private var currentTask: URLSessionDataTask?
     private var useChatEndpoint: Bool
+    private var model: String = ""
     
     init(useChatEndpoint: Bool) {
         self.useChatEndpoint = useChatEndpoint
@@ -81,6 +82,8 @@ class LLMService: NSObject, URLSessionDataDelegate {
         temperature: Double = 1.0,
         conversationHistory: [ChatMessage] = []
     ) {
+        // Store the model for error handling
+        self.model = model
         // Check if the endpoint already has the necessary path components
         var finalEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         
@@ -136,7 +139,21 @@ class LLMService: NSObject, URLSessionDataDelegate {
         let json: [String: Any]
         if useChatEndpoint {
             // Process conversation history with context window management
-            var messages: [[String: Any]] = [["role": "system", "content": finalSystemPrompt]]
+            var messages: [[String: Any]] = []
+            
+            // Check if the model supports system prompts
+            let modelSupportsSystemPrompt = !AppStorageManager.shared.modelsWithoutSystemPrompt.contains { modelPrefix in
+                model.contains(modelPrefix)
+            }
+            
+            if modelSupportsSystemPrompt {
+                // Add system prompt for models that support it
+                messages.append(["role": "system", "content": finalSystemPrompt])
+            } else {
+                // For models that don't support system prompts (like o1 series),
+                // prepend the system prompt to the first user message or add it as a user message
+                print("Model \(model) doesn't support system prompts. Converting to user message.")
+            }
             
             // Add conversation history if available
             if !conversationHistory.isEmpty {
@@ -166,13 +183,26 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 
                 if !messageExists {
                     // If we have a user prompt, prepend it to the message
-                    let finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                    var finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                    
+                    // For models that don't support system prompts, add the system prompt to the user message
+                    // Only do this for the first user message if there's no conversation history
+                    if !modelSupportsSystemPrompt && !finalSystemPrompt.isEmpty && messages.isEmpty {
+                        finalUserMessage = "Instructions: \(finalSystemPrompt)\n\nUser message: \(finalUserMessage)"
+                    }
+                    
                     messages.append(["role": "user", "content": finalUserMessage])
                 }
             } else {
                 // Just add the current message if no history
                 // If we have a user prompt, prepend it to the message
-                let finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                var finalUserMessage = userPrompt.isEmpty ? message : userPrompt + "\n\n" + message
+                
+                // For models that don't support system prompts, add the system prompt to the user message
+                if !modelSupportsSystemPrompt && !finalSystemPrompt.isEmpty {
+                    finalUserMessage = "Instructions: \(finalSystemPrompt)\n\nUser message: \(finalUserMessage)"
+                }
+                
                 messages.append(["role": "user", "content": finalUserMessage])
             }
             
@@ -253,6 +283,19 @@ class LLMService: NSObject, URLSessionDataDelegate {
                 // Check if this is a completion message with empty delta
                 if line.contains("finish_reason\":\"stop\"") {
                     print("Detected completion message with finish_reason: stop")
+                }
+                
+                // Check for errors related to system prompts not being supported
+                if line.contains("does not support 'system'") {
+                    print("Detected unsupported system prompt error: \(line)")
+                    
+                    // Add this model to the list of models that don't support system prompts
+                    DispatchQueue.main.async {
+                        if !AppStorageManager.shared.modelsWithoutSystemPrompt.contains(self.model) {
+                            AppStorageManager.shared.modelsWithoutSystemPrompt.append(self.model)
+                            print("Added \(self.model) to models without system prompt support")
+                        }
+                    }
                 }
                 
                 DispatchQueue.main.async {

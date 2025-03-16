@@ -57,8 +57,21 @@ struct SavedEndpoint: Identifiable, Codable, Equatable {
 }
 
 class AppStorageManager: ObservableObject {
+    // Singleton instance for easy access
+    static let shared = AppStorageManager()
     // Models available for the current endpoint
     @Published var availableModels: [String] = []
+    
+    // Models that don't support system prompts
+    @Published var modelsWithoutSystemPrompt: [String] = ["o1", "o1-mini", "o1-preview"]
+    
+    // Check if the current model supports system prompts
+    var currentModelSupportsSystemPrompt: Bool {
+        // Check if the preferred model contains any of the model names that don't support system prompts
+        return !modelsWithoutSystemPrompt.contains { modelPrefix in
+            preferredModel.contains(modelPrefix)
+        }
+    }
     @Published var hasValidEndpoint: Bool = false
     // Add a method to save endpoints to UserDefaults
     private func saveEndpoints() {
