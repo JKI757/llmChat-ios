@@ -168,6 +168,10 @@ struct ChatView: View {
                     TextField("Type a message...", text: $inputText, onCommit: {
                         if !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming {
                             sendMessage()
+                            // Explicitly clear the input text when user presses Enter
+                            DispatchQueue.main.async {
+                                self.inputText = ""
+                            }
                         }
                     })
                     .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -476,7 +480,10 @@ private func sendMessage() {
     messages.append(userMessage)
     let messageSent = inputText
     
-    inputText = ""
+    // Clear the input text field
+    DispatchQueue.main.async {
+        self.inputText = ""
+    }
     streamingMessage = ""
     currentDelta = ""
     
