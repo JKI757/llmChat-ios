@@ -65,6 +65,9 @@ class AppStorageManager: ObservableObject {
     // Models that don't support system prompts
     @Published var modelsWithoutSystemPrompt: [String] = ["o1", "o1-mini", "o1-preview"]
     
+    // Centralized list of supported languages
+    static let supportedLanguages = ["English", "Spanish", "French", "German", "Mandarin", "Japanese", "Business Japanese", "Tagalog", "Taglish", "Korean", "Russian"]
+    
     // Check if the current model supports system prompts
     var currentModelSupportsSystemPrompt: Bool {
         // Check if the preferred model contains any of the model names that don't support system prompts

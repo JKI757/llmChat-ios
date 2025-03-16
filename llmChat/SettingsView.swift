@@ -158,7 +158,7 @@ struct SettingsView: View {
             
             Section(header: Text("Preferred Language")) {
                 Picker("Language", selection: $storage.preferredLanguage) {
-                    ForEach(["English", "Spanish", "French", "German", "Chinese", "Japanese"], id: \.self) { language in
+                    ForEach(AppStorageManager.supportedLanguages, id: \.self) { language in
                         Text(language)
                     }
                 }

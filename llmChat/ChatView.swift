@@ -127,7 +127,8 @@ struct ChatView: View {
     @State private var selectedItem: PhotosPickerItem? = nil
     @State private var selectedImageData: Data? = nil
     @State private var isCheckingEndpoint: Bool = false  // Track if we're currently checking the endpoint
-    let languages = ["English", "Spanish", "French", "German", "Chinese", "Japanese", "Tagalog"]
+    // Use the centralized language list from AppStorageManager
+    let languages = AppStorageManager.supportedLanguages
     
     var body: some View {
         NavigationView {
