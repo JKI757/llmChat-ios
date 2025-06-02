@@ -17,10 +17,14 @@ final class OpenAILLMService: LLMServiceProtocol {
     /// - Parameters:
     ///   - apiKey: The OpenAI API key
     ///   - organizationID: Optional organization ID
-    init(apiKey: String, organizationID: String? = nil) {
+    ///   - baseURLString: The base URL for the API, defaults to OpenAI's API URL
+    init(apiKey: String, organizationID: String? = nil, baseURLString: String = "https://api.openai.com") {
         self.apiKey = apiKey
         self.organizationID = organizationID
-        self.baseURL = URL(string: "https://api.openai.com/v1")!
+        
+        // Ensure the URL ends with /v1 for OpenAI compatibility
+        let normalizedURL = baseURLString.hasSuffix("/v1") ? baseURLString : baseURLString.hasSuffix("/") ? baseURLString + "v1" : baseURLString + "/v1"
+        self.baseURL = URL(string: normalizedURL)!
     }
     
     // MARK: - LLMServiceProtocol Implementation

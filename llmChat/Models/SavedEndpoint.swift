@@ -14,6 +14,9 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
     /// Default model to use with this endpoint
     var defaultModel: String
     
+    /// Available models for this endpoint (used for custom APIs)
+    var availableModels: [String]
+    
     /// Maximum tokens for responses (optional)
     var maxTokens: Int?
     
@@ -43,6 +46,7 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
         name: String,
         url: String,
         defaultModel: String = "gpt-3.5-turbo",
+        availableModels: [String] = [],
         maxTokens: Int? = nil,
         requiresAuth: Bool = true,
         organizationID: String? = nil,
@@ -56,6 +60,7 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
         self.name = name
         self.url = url
         self.defaultModel = defaultModel
+        self.availableModels = availableModels.isEmpty && !defaultModel.isEmpty ? [defaultModel] : availableModels
         self.maxTokens = maxTokens
         self.requiresAuth = requiresAuth
         self.organizationID = organizationID
@@ -90,7 +95,7 @@ extension SavedEndpoint {
 extension SavedEndpoint {
     enum CodingKeys: String, CodingKey {
         case id, name, url, endpointType, isChatEndpoint, requiresAuth
-        case defaultModel, temperature, organizationID, maxTokens, lastUsed, createdAt
+        case defaultModel, availableModels, temperature, organizationID, maxTokens, lastUsed, createdAt
     }
     
     init(from decoder: Decoder) throws {
@@ -102,6 +107,13 @@ extension SavedEndpoint {
         isChatEndpoint = try container.decodeIfPresent(Bool.self, forKey: .isChatEndpoint) ?? true
         requiresAuth = try container.decodeIfPresent(Bool.self, forKey: .requiresAuth) ?? true
         defaultModel = try container.decodeIfPresent(String.self, forKey: .defaultModel) ?? "gpt-3.5-turbo"
+        // For backward compatibility, if availableModels is not present, use defaultModel
+        availableModels = try container.decodeIfPresent([String].self, forKey: .availableModels) ?? []
+        
+        // If availableModels is empty but we have a defaultModel, add it to the list
+        if availableModels.isEmpty && !defaultModel.isEmpty {
+            availableModels = [defaultModel]
+        }
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 1.0
         organizationID = try container.decodeIfPresent(String.self, forKey: .organizationID)
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)

@@ -15,6 +15,11 @@ enum LLMServiceFactory {
         switch endpoint.endpointType {
         case .localModel:
             // Handle local model
+            // If URL is empty, we can't create a service yet - user needs to select a model file
+            if endpoint.url.isEmpty {
+                throw ServiceError.modelNotSelected
+            }
+            
             guard let modelURL = URL(string: endpoint.url) else {
                 throw ServiceError.invalidEndpoint(endpoint.url)
             }
@@ -38,11 +43,12 @@ enum LLMServiceFactory {
                 
                 return OpenAILLMService(
                     apiKey: token,
-                    organizationID: endpoint.organizationID
+                    organizationID: endpoint.organizationID,
+                    baseURLString: endpoint.url
                 )
             } else {
                 // For endpoints that don't require auth
-                return OpenAILLMService(apiKey: "")
+                return OpenAILLMService(apiKey: "", baseURLString: endpoint.url)
             }
         }
     }
@@ -78,6 +84,7 @@ enum LLMServiceFactory {
 enum ServiceError: LocalizedError {
     case invalidEndpoint(String)
     case modelNotFound(String)
+    case modelNotSelected
     case missingToken
     case noDefaultEndpoint
     case unsupportedEndpointType
@@ -88,6 +95,8 @@ enum ServiceError: LocalizedError {
             return "Invalid endpoint URL: \(url)"
         case .modelNotFound(let filename):
             return "Model file not found: \(filename)"
+        case .modelNotSelected:
+            return "No local model file selected. Please select a model file in the endpoint settings."
         case .missingToken:
             return "API token is required for this endpoint"
         case .noDefaultEndpoint:

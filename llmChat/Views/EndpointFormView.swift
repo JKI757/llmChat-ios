@@ -10,6 +10,8 @@ struct EndpointFormView: View {
     @State private var isChatEndpoint: Bool
     @State private var requiresAuth: Bool
     @State private var defaultModel: String
+    @State private var availableModels: [String] = []
+    @State private var newModelName: String = ""
     @State private var temperature: Double
     @State private var apiToken: String
     @State private var organizationID: String
@@ -33,6 +35,7 @@ struct EndpointFormView: View {
         _isChatEndpoint = State(initialValue: endpoint?.isChatEndpoint ?? true)
         _requiresAuth = State(initialValue: endpoint?.requiresAuth ?? true)
         _defaultModel = State(initialValue: endpoint?.defaultModel ?? "")
+        _availableModels = State(initialValue: endpoint?.availableModels ?? [])
         _temperature = State(initialValue: endpoint?.temperature ?? 0.7)
         _apiToken = State(initialValue: endpoint?.id != nil ? viewModel.getToken(for: endpoint!.id) : "")
         _organizationID = State(initialValue: endpoint?.organizationID ?? "")
@@ -123,7 +126,70 @@ struct EndpointFormView: View {
             
             // Model Settings Section
             Section(header: Text("Model Settings")) {
-                TextField("Default Model", text: $defaultModel)
+                if endpointType == .customAPI {
+                    // For custom APIs, allow multiple models with a default selection
+                    Picker("Default Model", selection: $defaultModel) {
+                        ForEach(availableModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                        // Add option for empty string if no models are available
+                        if availableModels.isEmpty {
+                            Text("No models available").tag("")
+                        }
+                    }
+                    .disabled(availableModels.isEmpty)
+                    
+                    // List of available models
+                    VStack(alignment: .leading) {
+                        Text("Available Models")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        ForEach(availableModels, id: \.self) { model in
+                            HStack {
+                                Text(model)
+                                Spacer()
+                                Button(action: {
+                                    // Don't allow removing the default model
+                                    if model != defaultModel {
+                                        availableModels.removeAll { $0 == model }
+                                    }
+                                }) {
+                                    Image(systemName: "minus.circle.fill")
+                                        .foregroundColor(.red)
+                                }
+                                .disabled(model == defaultModel)
+                            }
+                        }
+                        
+                        // Add new model field
+                        HStack {
+                            TextField("Add Model", text: $newModelName)
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                            
+                            Button(action: {
+                                let trimmedName = newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !trimmedName.isEmpty && !availableModels.contains(trimmedName) {
+                                    availableModels.append(trimmedName)
+                                    // If this is the first model, make it the default
+                                    if defaultModel.isEmpty {
+                                        defaultModel = trimmedName
+                                    }
+                                    newModelName = ""
+                                }
+                            }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundColor(.blue)
+                            }
+                            .disabled(newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    // For OpenAI and local models, just a simple text field
+                    TextField("Default Model", text: $defaultModel)
+                }
                 
                 if endpointType == .localModel {
                     TextField("Max Tokens", text: $maxTokens)
@@ -197,11 +263,28 @@ struct EndpointFormView: View {
         let maxTokensValue = endpointType == .localModel ? Int(maxTokens) : nil
         let orgID = organizationID.isEmpty ? nil : organizationID
         
+        // Prepare available models based on endpoint type
+        var modelsList: [String] = []
+        if endpointType == .customAPI {
+            // For custom APIs, use the user-defined list
+            modelsList = availableModels
+            
+            // Ensure the default model is in the list
+            let trimmedDefault = defaultModel.trimmingCharacters(in: .whitespaces)
+            if !trimmedDefault.isEmpty && !modelsList.contains(trimmedDefault) {
+                modelsList.append(trimmedDefault)
+            }
+        } else if !defaultModel.trimmingCharacters(in: .whitespaces).isEmpty {
+            // For other types, just include the default model
+            modelsList = [defaultModel.trimmingCharacters(in: .whitespaces)]
+        }
+        
         let endpoint = SavedEndpoint(
             id: endpoint?.id ?? UUID(),
             name: name.trimmingCharacters(in: .whitespaces),
             url: url.trimmingCharacters(in: .whitespaces),
             defaultModel: defaultModel.trimmingCharacters(in: .whitespaces),
+            availableModels: modelsList,
             maxTokens: maxTokensValue,
             requiresAuth: endpointType == .localModel ? false : requiresAuth,
             organizationID: orgID,

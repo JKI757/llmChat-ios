@@ -114,6 +114,7 @@ struct EndpointRow: View {
     let isDefault: Bool
     let onSetDefault: () -> Void
     let onEdit: () -> Void
+    @State private var showingConfirmation = false
     
     private var iconName: String {
         switch endpoint.endpointType {
@@ -190,7 +191,10 @@ struct EndpointRow: View {
             
             // Actions
             if !isDefault {
-                Button(action: onSetDefault) {
+                Button(action: {
+                    onSetDefault()
+                    showingConfirmation = true
+                }) {
                     Text("Set Default")
                         .font(.caption)
                         .padding(.horizontal, 8)
@@ -198,6 +202,28 @@ struct EndpointRow: View {
                         .background(Color.blue.opacity(0.1))
                         .foregroundColor(.blue)
                         .cornerRadius(8)
+                }
+                .overlay(
+                    Group {
+                        if showingConfirmation {
+                            Text("✓ Set as default")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.green.opacity(0.1))
+                                .foregroundColor(.green)
+                                .cornerRadius(8)
+                                .transition(.opacity)
+                        }
+                    }
+                )
+                .onChange(of: showingConfirmation) { newValue in
+                    if newValue {
+                        // Auto-hide the confirmation after 2 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            showingConfirmation = false
+                        }
+                    }
                 }
                 .buttonStyle(BorderlessButtonStyle())
             }

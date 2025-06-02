@@ -6,7 +6,7 @@ struct ChatView: View {
     @EnvironmentObject var storage: AppStorageManager
     @Environment(\.colorScheme) private var colorScheme
     
-    @State private var showingModelSelector = false
+    // Model selection is now handled by the menu
     @State private var showingSettings = false
     @State private var showingClearConfirmation = false
     @State private var scrollToBottomID: UUID?
@@ -18,21 +18,64 @@ struct ChatView: View {
             // Messages List
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(viewModel.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                                .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                                .padding(.vertical, 4)
+                    if viewModel.hasServiceError && viewModel.errorMessage != nil {
+                        // Show service configuration error with direct link to settings
+                        VStack(spacing: 16) {
+                            Spacer()
+                            
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(.system(size: 50))
+                                .foregroundColor(.orange)
+                            
+                            Text(viewModel.errorMessage ?? "")
+                                .font(.headline)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            Text("Please configure an endpoint in settings to start chatting.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            
+                            Button(action: { showingSettings = true }) {
+                                HStack {
+                                    Image(systemName: "gear")
+                                    Text("Open Settings")
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            }
+                            .padding(.top, 8)
+                            
+                            Spacer()
                         }
-                        
-                        // Invisible view at the bottom to scroll to
-                        Color.clear
-                            .frame(height: 1)
-                            .id(scrollBottomID)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                    } else if viewModel.hasServiceError {
+                        // No specific error message but no service available
+                        // Just show an empty view with messages list
+                        EmptyView()
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(viewModel.messages) { message in
+                                MessageBubble(message: message)
+                                    .id(message.id)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                                    .padding(.vertical, 4)
+                            }
+                            
+                            // Invisible view at the bottom to scroll to
+                            Color.clear
+                                .frame(height: 1)
+                                .id(scrollBottomID)
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 8)
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 8)
                 }
                 .onChange(of: viewModel.messages) { _ in
                     withAnimation {
@@ -45,35 +88,90 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 Divider()
                 
-                // Model selector
-                Button(action: { showingModelSelector = true }) {
-                    HStack {
-                        Image(systemName: "cpu")
-                            .imageScale(.small)
+                // Model and endpoint selector
+                Menu {
+                    // Endpoint selection section
+                    Section("Endpoint") {
+                        ForEach(storage.savedEndpoints) { endpoint in
+                            Button(action: {
+                                storage.setDefaultEndpoint(id: endpoint.id)
+                            }) {
+                                HStack {
+                                    Text(endpoint.name)
+                                    if viewModel.selectedEndpoint == endpoint.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
                         
-                        Text(viewModel.selectedModel)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        Divider()
+                        
+                        Button(action: { showingSettings = true }) {
+                            Label("Manage Endpoints", systemImage: "gear")
+                        }
+                    }
+                    
+                    // Model selection section (only if we have an endpoint selected)
+                    if !viewModel.availableModels.isEmpty {
+                        Section("Model") {
+                            ForEach(viewModel.availableModels, id: \.self) { model in
+                                Button(action: {
+                                    viewModel.selectedModel = model
+                                }) {
+                                    HStack {
+                                        Text(model)
+                                        if viewModel.selectedModel == model {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        // Show endpoint icon based on type
+                        if let endpointID = viewModel.selectedEndpoint,
+                           let endpoint = storage.savedEndpoints.first(where: { $0.id == endpointID }) {
+                            Image(systemName: endpoint.endpointType == .localModel ? "desktopcomputer" : "cloud")
+                                .imageScale(.small)
+                            
+                            // Show endpoint name and model
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(endpoint.name)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Text(viewModel.selectedModel.isEmpty ? "Select Model" : viewModel.selectedModel)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        } else {
+                            Image(systemName: "cpu")
+                                .imageScale(.small)
+                            
+                            Text("Select Endpoint")
+                                .lineLimit(1)
+                        }
                         
                         if viewModel.isLoadingModels {
                             ProgressView()
                                 .padding(.leading, 4)
+                        } else {
+                            Image(systemName: "chevron.down")
+                                .imageScale(.small)
+                                .foregroundColor(.secondary)
                         }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.down")
-                            .font(.caption2)
                     }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(12)
-                    .padding(.horizontal)
-                    .padding(.top, 8)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(16)
                 }
+                .disabled(viewModel.isLoadingModels)
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
                 .buttonStyle(PlainButtonStyle())
                 .disabled(viewModel.availableModels.isEmpty)
                 
@@ -88,16 +186,21 @@ struct ChatView: View {
                     .padding(.bottom, 8)
                     
                     // Text Input
-                    TextEditor(text: $viewModel.inputText)
-                        .frame(minHeight: 40, maxHeight: 120)
-                        .padding(8)
-                        .background(Color(.systemBackground))
-                        .cornerRadius(18)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                        )
-                        .padding(.vertical, 8)
+                    ZStack(alignment: .trailing) {
+                        TextEditor(text: $viewModel.inputText)
+                            .frame(minHeight: 40, maxHeight: 120)
+                            .padding(8)
+                            .background(Color(.systemBackground))
+                            .cornerRadius(18)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            )
+                            .padding(.vertical, 8)
+                            .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.isSending)
+                            .opacity((viewModel.hasServiceError && viewModel.errorMessage != nil) ? 0.6 : 1.0)
+                        
+                    }
                     
                     // Send Button
                     Button(action: viewModel.sendMessage) {
@@ -107,11 +210,11 @@ struct ChatView: View {
                         } else {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
-                                .foregroundColor(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .blue)
+                                .foregroundColor(((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending) ? .gray : .blue)
                                 .padding(8)
                         }
                     }
-                    .disabled(viewModel.isSending || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending)
                     .padding(.trailing, 8)
                     .padding(.bottom, 8)
                 }
@@ -123,17 +226,28 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                if !viewModel.messages.isEmpty {
-                    Button(action: { showingClearConfirmation = true }) {
-                        Image(systemName: "trash")
-                            .foregroundColor(.red)
+                Button(action: {
+                    // Create a new chat
+                    withAnimation {
+                        viewModel.clearConversation()
                     }
+                }) {
+                    Image(systemName: "square.and.pencil")
                 }
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showingSettings = true }) {
-                    Image(systemName: "gear")
+                HStack(spacing: 16) {
+                    if !viewModel.messages.isEmpty {
+                        Button(action: { showingClearConfirmation = true }) {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
+                    }
+                    
+                    Button(action: { showingSettings = true }) {
+                        Image(systemName: "gear")
+                    }
                 }
             }
         }
@@ -142,12 +256,7 @@ struct ChatView: View {
                 SettingsView(viewModel: SettingsViewModel())
             }
         }
-        .actionSheet(isPresented: $showingModelSelector) {
-            ActionSheet(
-                title: Text("Select Model"),
-                buttons: modelSelectorButtons()
-            )
-        }
+        // Model selection is now handled by the menu
         .confirmationDialog("Clear Conversation", isPresented: $showingClearConfirmation) {
             Button("Clear", role: .destructive) {
                 withAnimation {
@@ -171,15 +280,7 @@ struct ChatView: View {
         }
     }
     
-    private func modelSelectorButtons() -> [ActionSheet.Button] {
-        var buttons: [ActionSheet.Button] = viewModel.availableModels.map { model in
-                .default(Text(model)) {
-                    viewModel.selectedModel = model
-                }
-        }
-        buttons.append(.cancel())
-        return buttons
-    }
+    // Model selection is now handled by the menu in the UI
 }
 
 // MARK: - Message Bubble View

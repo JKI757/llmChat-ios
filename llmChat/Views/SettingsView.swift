@@ -47,17 +47,43 @@ struct SettingsView: View {
             
             // Endpoints Section
             Section(header: Text("Endpoints")) {
+                // Current endpoint picker
+                if !storage.savedEndpoints.isEmpty {
+                    Picker("Active Endpoint", selection: Binding<UUID>(
+                        get: { storage.defaultEndpointID ?? UUID() },
+                        set: { storage.setDefaultEndpoint(id: $0) }
+                    )) {
+                        ForEach(storage.savedEndpoints) { endpoint in
+                            HStack {
+                                Image(systemName: endpoint.endpointType == .localModel ? "desktopcomputer" : "cloud")
+                                Text(endpoint.name)
+                            }
+                            .tag(endpoint.id)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    
+                    // Show the current model for the selected endpoint
+                    if let defaultID = storage.defaultEndpointID,
+                       let endpoint = storage.savedEndpoints.first(where: { $0.id == defaultID }) {
+                        HStack {
+                            Text("Model")
+                            Spacer()
+                            Text(endpoint.defaultModel.isEmpty ? "Not set" : endpoint.defaultModel)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } else {
+                    Text("No endpoints configured")
+                        .foregroundColor(.secondary)
+                }
+                
+                // Link to manage endpoints
                 NavigationLink(destination: EndpointsView(storage: storage)) {
                     HStack {
                         Image(systemName: "server.rack")
                             .foregroundColor(.blue)
                         Text("Manage Endpoints")
-                        Spacer()
-                        if let defaultID = storage.defaultEndpointID,
-                           let endpoint = storage.savedEndpoints.first(where: { $0.id == defaultID }) {
-                            Text(endpoint.name)
-                                .foregroundColor(.secondary)
-                        }
                     }
                 }
             }

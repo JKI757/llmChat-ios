@@ -8,6 +8,13 @@
 import Foundation
 import CoreData
 
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let defaultEndpointChanged = Notification.Name("defaultEndpointChanged")
+    static let endpointUpdated = Notification.Name("endpointUpdated")
+}
+
 // MARK: - Saved Prompt Model
 
 /// Model for saved prompts with support for both system and user prompts
@@ -182,12 +189,18 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     func addEndpoint(_ endpoint: SavedEndpoint) {
         savedEndpoints.append(endpoint)
         saveEndpoints()
+        
+        // Post a notification that a new endpoint has been added
+        NotificationCenter.default.post(name: .endpointUpdated, object: endpoint)
     }
     
     func updateEndpoint(_ endpoint: SavedEndpoint) {
         if let index = savedEndpoints.firstIndex(where: { $0.id == endpoint.id }) {
             savedEndpoints[index] = endpoint
             saveEndpoints()
+            
+            // Post a notification that the endpoint has been updated
+            NotificationCenter.default.post(name: .endpointUpdated, object: endpoint)
         }
     }
     
@@ -199,9 +212,25 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     }
     
     func setDefaultEndpoint(id: UUID) {
-        if savedEndpoints.contains(where: { $0.id == id }) {
+        if let endpoint = savedEndpoints.first(where: { $0.id == id }) {
+            // Set the default endpoint ID
             defaultEndpointID = id
             UserDefaults.standard.set(id.uuidString, forKey: "defaultEndpointID")
+            
+            // Update the preferred model to match the endpoint's default model
+            if !endpoint.defaultModel.isEmpty {
+                preferredModel = endpoint.defaultModel
+                UserDefaults.standard.set(endpoint.defaultModel, forKey: "preferredModel")
+            }
+            
+            // Check if the endpoint requires authentication and has a token
+            if endpoint.requiresAuth && getToken(for: id) == nil {
+                // We might want to prompt for a token here in the future
+            }
+            
+            // Post a notification that the default endpoint has changed
+            NotificationCenter.default.post(name: .defaultEndpointChanged, object: id)
+            
             // Notify observers that the default endpoint has changed
             objectWillChange.send()
         }
@@ -323,6 +352,7 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
             self.savedEndpoints = decodedEndpoints
         } else {
             // Add default endpoints if none exist
+            initializeDefaultEndpoints()
         }
         
         // If we have a default endpoint, use it on startup
