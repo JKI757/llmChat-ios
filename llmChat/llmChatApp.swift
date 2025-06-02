@@ -19,27 +19,41 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @main
-struct LLMChatApp: App {
-    // Create a shared instance of AppStorageManager
-    @StateObject private var storageManager = AppStorageManager()
-    
-    // Register the app delegate
-    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+struct llmChatApp: App {
+    @StateObject private var storage = AppStorageManager.shared
+    @State private var selectedTab = 0
     
     init() {
-        // This is a workaround to allow HTTP connections
-        if let urlSessionConfig = URLSessionConfiguration.default.value(forKey: "_networkServiceType") {
-            URLSessionConfiguration.default.httpShouldSetCookies = true
-            URLSessionConfiguration.default.httpCookieAcceptPolicy = .always
-            URLSessionConfiguration.default.httpMaximumConnectionsPerHost = 10
-            print("URLSession configured to allow HTTP connections")
-        }
+        // Configure appearance
+        configureAppearance()
     }
     
     var body: some Scene {
         WindowGroup {
-            MainView()
-                .environmentObject(storageManager)
+            ContentView()
+                .environment(\.managedObjectContext, CoreDataManager.shared.container.viewContext)
+                .environmentObject(storage)
+        }
+    }
+    
+    private func configureAppearance() {
+        // Configure navigation bar appearance
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor.systemBackground
+        appearance.shadowColor = .clear
+        
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().compactAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+        
+        // Fix for iOS 15+ tab bar transparency
+        if #available(iOS 15.0, *) {
+            let tabBarAppearance = UITabBarAppearance()
+            tabBarAppearance.configureWithOpaqueBackground()
+            UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
         }
     }
 }
+
+

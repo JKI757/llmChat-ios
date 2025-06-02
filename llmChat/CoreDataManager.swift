@@ -50,10 +50,16 @@ class CoreDataManager {
     }
 
     @discardableResult
-    func saveConversation(model: String, systemPrompt: String, userPrompt: String = "", language: String, messages: [ChatMessage], apiToken: String = "", apiEndpoint: String = "", conversationID: UUID? = nil) throws -> UUID? {
-        // For backward compatibility
-        let prompt = systemPrompt
-        // Check if we're updating an existing conversation or creating a new one
+    func saveConversation(
+        title: String = "New Conversation", 
+        model: String? = nil,
+        systemPrompt: String? = nil,
+        userPrompt: String? = nil,
+        language: String? = nil,
+        endpointID: UUID? = nil,
+        messages: [ChatMessage], 
+        conversationID: UUID? = nil
+    ) throws -> UUID? {
         let conversation: Conversation
         let isNewConversation: Bool
         
@@ -68,43 +74,80 @@ class CoreDataManager {
                     // Update existing conversation
                     conversation = existingConversation
                     isNewConversation = false
-                    print("Updating existing conversation: \(existingID)")
                 } else {
                     // Conversation with ID not found, create new
                     conversation = Conversation(context: context)
                     conversation.id = existingID
                     isNewConversation = true
-                    print("Creating new conversation with specified ID: \(existingID)")
                 }
             } catch {
                 // Error fetching, create new
                 conversation = Conversation(context: context)
                 conversation.id = UUID()
                 isNewConversation = true
-                print("Error fetching conversation, creating new: \(error)")
             }
         } else {
             // No ID provided, create new conversation
             conversation = Conversation(context: context)
             conversation.id = UUID()
             isNewConversation = true
-            print("Creating new conversation with new ID")
         }
         
-        // Always update timestamp when saving
+        // Update conversation properties
         conversation.timestamp = Date()
+        conversation.title = title
         conversation.model = model
         conversation.systemPrompt = systemPrompt
+        conversation.userPrompt = userPrompt
         conversation.language = language
+        conversation.endpointID = endpointID
         
-        // Store system prompt and user prompt separately
-        conversation.systemPrompt = systemPrompt
-        conversation.userPrompt = userPrompt.isEmpty ? nil : userPrompt
-        
-        if let encodedMessages = try? JSONEncoder().encode(messages) {
-            conversation.messages = encodedMessages
-        } else {
-            conversation.messages = nil
+        // Store messages
+        for message in messages {
+            let storedMessage = Message(context: context)
+            storedMessage.timestamp = message.timestamp
+            storedMessage.content = message.content
+            storedMessage.role = message.role
+            storedMessage.isError = message.isError
+            storedMessage.conversation = conversation
+        }
+        if !isNewConversation {
+            // For existing conversations, we need to be more careful
+            // First, get existing messages
+            let existingMessages = conversation.messages?.allObjects as? [Message] ?? []
+            
+            // Create a set of message contents we want to keep (since we don't have IDs)
+            var messageContentsToKeep = Set<String>()
+            
+            // Update existing messages and add new ones
+            for message in messages {
+                let messageKey = message.content + message.role + message.timestamp.description
+                if let existingMessage = existingMessages.first(where: { $0.content == message.content && $0.role == message.role }) {
+                    // Update existing message
+                    existingMessage.timestamp = message.timestamp
+                    existingMessage.content = message.content
+                    existingMessage.role = message.role
+                    existingMessage.isError = message.isError
+                    messageContentsToKeep.insert(messageKey)
+                } else {
+                    // Add new message
+                    let storedMessage = Message(context: context)
+                    storedMessage.timestamp = message.timestamp
+                    storedMessage.content = message.content
+                    storedMessage.role = message.role
+                    storedMessage.isError = message.isError
+                    storedMessage.conversation = conversation
+                    messageContentsToKeep.insert(messageKey)
+                }
+            }
+            
+            // Remove messages that are no longer needed
+            for message in existingMessages {
+                let messageKey = message.content + message.role + message.timestamp.description
+                if !messageContentsToKeep.contains(messageKey) {
+                    context.delete(message)
+                }
+            }
         }
         
         // Save immediately
@@ -112,60 +155,47 @@ class CoreDataManager {
             try context.save()
             print("Successfully saved conversation to Core Data")
         } catch {
-            print("Failed to save conversation: \(error)")
+            print("Error saving conversation: \(error)")
             throw error
         }
         
-        // Only generate a new title if this is a new conversation or if we have a significant update
-        // (e.g., more than 2 new messages since last save)
-        let shouldUpdateTitle = isNewConversation || messages.count > 2
-        
-        if shouldUpdateTitle {
-            // Generate a title using LLM if possible
-            LLMService.generateConversationSummary(
-                messages: messages,
-                apiToken: apiToken,
-                endpoint: apiEndpoint,
-                model: model,
-                systemPrompt: systemPrompt,
-                userPrompt: userPrompt
-            ) { [weak self] title in
-                guard let self = self else { return }
-                
-                // Store the title in UserDefaults
-                let titleKey = "conversation_title_\(conversation.id?.uuidString ?? UUID().uuidString)"
-                UserDefaults.standard.set(title, forKey: titleKey)
-                print("Saved conversation title to UserDefaults: \(title)")
-            }
-        }
-        
-        // Return the ID for tracking
         return conversation.id
     }
-
+    
     func fetchConversations() -> [Conversation] {
-        let request: NSFetchRequest<Conversation> = Conversation.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
-        
-        // Ensure we're getting fresh data
-        context.refreshAllObjects()
+        let request = NSFetchRequest<Conversation>(entityName: "Conversation")
+        request.sortDescriptors = [NSSortDescriptor(keyPath: \Conversation.timestamp, ascending: false)]
         
         do {
-            let results = try context.fetch(request)
-            print("Fetched \(results.count) conversations from Core Data")
-            return results
+            return try container.viewContext.fetch(request)
         } catch {
-            print("Failed to fetch conversations: \(error)")
+            print("Error fetching conversations: \(error)")
             return []
         }
     }
-
+    
     func deleteConversation(_ conversation: Conversation) {
-        context.delete(conversation)
+        container.viewContext.delete(conversation)
+        
         do {
-            try context.save()
+            try container.viewContext.save()
         } catch {
-            print("Failed to delete conversation: \(error)")
+            print("Error deleting conversation: \(error)")
         }
+    }
+    
+    func getMessages(for conversation: Conversation) -> [ChatMessage] {
+        guard let messages = conversation.messages?.allObjects as? [Message] else {
+            return []
+        }
+        
+        return messages.map { message in
+            ChatMessage(
+                content: message.content,
+                role: message.role,
+                timestamp: message.timestamp,
+                isError: message.isError
+            )
+        }.sorted { $0.timestamp < $1.timestamp }
     }
 }

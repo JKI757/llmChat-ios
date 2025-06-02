@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PromptsView: View {
-    @StateObject private var storage = AppStorageManager()
+    @EnvironmentObject private var storage: AppStorageManager
     @State private var isAddingPrompt = false
     @State private var isEditingPrompt = false
     @State private var editingPromptID: UUID?
@@ -230,6 +230,7 @@ struct PromptsView_Previews: PreviewProvider {
     static var previews: some View {
         NavigationView {
             PromptsView()
+                .environmentObject(AppStorageManager.shared)
         }
     }
 }

@@ -6,61 +6,241 @@
 //
 
 import Foundation
+import CoreData
 
-// Model for saved prompts
+// MARK: - Saved Prompt Model
+
+/// Model for saved prompts with support for both system and user prompts
 struct SavedPrompt: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
     var systemPrompt: String
     var userPrompt: String
+    var lastUsed: Date?
+    var createdAt: Date
     
-    // For backward compatibility
-    var content: String {
-        return systemPrompt
-    }
-    
-    init(id: UUID = UUID(), name: String, systemPrompt: String, userPrompt: String = "") {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        systemPrompt: String,
+        userPrompt: String = "",
+        lastUsed: Date? = nil,
+        createdAt: Date = Date()
+    ) {
         self.id = id
         self.name = name
         self.systemPrompt = systemPrompt
         self.userPrompt = userPrompt
+        self.lastUsed = lastUsed
+        self.createdAt = createdAt
     }
     
-    // Backward compatibility initializer
-    init(id: UUID = UUID(), name: String, content: String) {
-        self.id = id
-        self.name = name
-        self.systemPrompt = content
-        self.userPrompt = ""
+    /// Updates the last used timestamp to now
+    func withUpdatedLastUsed() -> SavedPrompt {
+        var updated = self
+        updated.lastUsed = Date()
+        return updated
     }
 }
 
-// Model for saved endpoints
-struct SavedEndpoint: Identifiable, Codable, Equatable {
-    var id: UUID
-    var name: String
-    var url: String
-    var isChatEndpoint: Bool
-    var requiresAuth: Bool
-    var defaultModel: String
-    var temperature: Double
+// Using SavedEndpoint from Models/SavedEndpoint.swift
+
+// MARK: - App Storage Manager Protocol
+
+/// Protocol for app storage management to facilitate testing
+protocol AppStorageManagerProtocol {
+    var defaultEndpointID: UUID? { get }
+    var savedEndpoints: [SavedEndpoint] { get }
     
-    init(id: UUID = UUID(), name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool = true, defaultModel: String = "gpt-3.5-turbo", temperature: Double = 1.0) {
-        self.id = id
-        self.name = name
-        self.url = url
-        self.isChatEndpoint = isChatEndpoint
-        self.requiresAuth = requiresAuth
-        self.defaultModel = defaultModel
-        self.temperature = temperature
-    }
+    func getToken(for endpointID: UUID) -> String?
+    func getEndpoint(by id: UUID) -> SavedEndpoint?
 }
 
-class AppStorageManager: ObservableObject {
-    // Singleton instance for easy access
-    static let shared = AppStorageManager()
-    // Models available for the current endpoint
+// MARK: - Core Data Manager
+
+class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
+    // Singleton instance
+    static let shared: AppStorageManager = {
+        let instance = AppStorageManager()
+        return instance
+    }()
+    
+    // Core Data Manager
+    let coreDataManager = CoreDataManager.shared
+    
+    // MARK: - Published Properties
+    
+    @Published var systemPrompt: String = "You are a helpful AI assistant." {
+        didSet { UserDefaults.standard.set(systemPrompt, forKey: "systemPrompt") }
+    }
+    
+    @Published var userPrompt: String = "" {
+        didSet { UserDefaults.standard.set(userPrompt, forKey: "userPrompt") }
+    }
+    
+    @Published var savedPrompts: [SavedPrompt] = [] {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(savedPrompts) {
+                UserDefaults.standard.set(encoded, forKey: "savedPrompts")
+            }
+        }
+    }
+    
+    @Published var savedEndpoints: [SavedEndpoint] = []
+    @Published var defaultEndpointID: UUID?
+    @Published var defaultPromptID: UUID?
+    @Published var hasValidEndpoint: Bool = false
     @Published var availableModels: [String] = []
+    @Published var selectedModel: String = ""
+    private var endpointTokens: [String: String] = [:]
+    
+    // MARK: - Initialization
+    
+    init() {
+        // Initialize properties with default values
+        self.apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
+        self.apiEndpoint = UserDefaults.standard.string(forKey: "apiEndpoint") ?? "https://api.openai.com/v1"
+        self.preferredLanguage = UserDefaults.standard.string(forKey: "preferredLanguage") ?? "en"
+        self.preferredModel = UserDefaults.standard.string(forKey: "preferredModel") ?? "gpt-3.5-turbo"
+        self.useChatEndpoint = UserDefaults.standard.bool(forKey: "useChatEndpoint")
+        self.temperature = UserDefaults.standard.double(forKey: "temperature")
+        if self.temperature == 0 { self.temperature = 0.7 } // Default if not set
+        
+        // Load saved prompts
+        if let data = UserDefaults.standard.data(forKey: "savedPrompts"),
+           let prompts = try? JSONDecoder().decode([SavedPrompt].self, from: data) {
+            self.savedPrompts = prompts
+        } else {
+            // Create a default prompt if none exist
+            self.savedPrompts = [
+                SavedPrompt(
+                    name: "Default Assistant",
+                    systemPrompt: "You are a helpful AI assistant.",
+                    userPrompt: ""
+                )
+            ]
+        }
+        
+        // Load saved endpoints
+        if let data = UserDefaults.standard.data(forKey: "savedEndpoints"),
+           let endpoints = try? JSONDecoder().decode([SavedEndpoint].self, from: data) {
+            self.savedEndpoints = endpoints
+        } else {
+            self.savedEndpoints = [SavedEndpoint.defaultOpenAI]
+        }
+        
+        // Load endpoint tokens
+        if let data = UserDefaults.standard.data(forKey: "endpointTokens"),
+           let tokens = try? JSONDecoder().decode([String: String].self, from: data) {
+            self.endpointTokens = tokens
+        }
+        
+        // Load other settings
+        self.systemPrompt = UserDefaults.standard.string(forKey: "systemPrompt") ?? "You are a helpful AI assistant."
+        self.userPrompt = UserDefaults.standard.string(forKey: "userPrompt") ?? ""
+        self.defaultEndpointID = UUID(uuidString: UserDefaults.standard.string(forKey: "defaultEndpointID") ?? "")
+        self.defaultPromptID = UUID(uuidString: UserDefaults.standard.string(forKey: "defaultPromptID") ?? "")
+    }
+    
+    // MARK: - Token Management
+    
+    func getToken(for endpointID: UUID) -> String? {
+        return endpointTokens[endpointID.uuidString]
+    }
+    
+    func getEndpoint(by id: UUID) -> SavedEndpoint? {
+        return savedEndpoints.first(where: { $0.id == id })
+    }
+    
+    func setToken(_ token: String, for endpointID: UUID) {
+        endpointTokens[endpointID.uuidString] = token
+        saveEndpointTokens()
+    }
+    
+    // MARK: - Saving Methods
+    
+    private func savePrompts() {
+        if let data = try? JSONEncoder().encode(savedPrompts) {
+            UserDefaults.standard.set(data, forKey: "savedPrompts")
+        }
+    }
+    
+    private func saveEndpoints() {
+        if let data = try? JSONEncoder().encode(savedEndpoints) {
+            UserDefaults.standard.set(data, forKey: "savedEndpoints")
+        }
+    }
+    
+    private func saveEndpointTokens() {
+        if let data = try? JSONEncoder().encode(endpointTokens) {
+            UserDefaults.standard.set(data, forKey: "endpointTokens")
+        }
+    }
+    
+    // MARK: - Endpoint Management
+    
+    func addEndpoint(_ endpoint: SavedEndpoint) {
+        savedEndpoints.append(endpoint)
+        saveEndpoints()
+    }
+    
+    func updateEndpoint(_ endpoint: SavedEndpoint) {
+        if let index = savedEndpoints.firstIndex(where: { $0.id == endpoint.id }) {
+            savedEndpoints[index] = endpoint
+            saveEndpoints()
+        }
+    }
+    
+    func deleteEndpoint(_ endpoint: SavedEndpoint) {
+        savedEndpoints.removeAll { $0.id == endpoint.id }
+        endpointTokens.removeValue(forKey: endpoint.id.uuidString)
+        saveEndpoints()
+        saveEndpointTokens()
+    }
+    
+    func setDefaultEndpoint(id: UUID) {
+        if savedEndpoints.contains(where: { $0.id == id }) {
+            defaultEndpointID = id
+            UserDefaults.standard.set(id.uuidString, forKey: "defaultEndpointID")
+            // Notify observers that the default endpoint has changed
+            objectWillChange.send()
+        }
+    }
+    
+    // MARK: - Prompt Management
+    
+    // First declaration of addPrompt is kept
+    
+    func updatePrompt(_ prompt: SavedPrompt) {
+        if let index = savedPrompts.firstIndex(where: { $0.id == prompt.id }) {
+            savedPrompts[index] = prompt
+            savePrompts()
+        }
+    }
+    
+    func deletePrompt(_ prompt: SavedPrompt) {
+        savedPrompts.removeAll { $0.id == prompt.id }
+        savePrompts()
+    }
+    
+    func selectPrompt(id: UUID) {
+        if let prompt = savedPrompts.first(where: { $0.id == id }) {
+            self.systemPrompt = prompt.systemPrompt
+            self.userPrompt = prompt.userPrompt
+            UserDefaults.standard.set(prompt.systemPrompt, forKey: "systemPrompt")
+            UserDefaults.standard.set(prompt.userPrompt, forKey: "userPrompt")
+            
+            // Update last used timestamp
+            updatePrompt(prompt.withUpdatedLastUsed())
+        }
+    }
+    
+    func setDefaultPrompt(id: UUID) {
+        if savedPrompts.contains(where: { $0.id == id }) {
+            defaultPromptID = id
+            UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
+        }
+    }
     
     // Models that don't support system prompts
     @Published var modelsWithoutSystemPrompt: [String] = ["o1", "o1-mini", "o1-preview"]
@@ -75,28 +255,8 @@ class AppStorageManager: ObservableObject {
             preferredModel.contains(modelPrefix)
         }
     }
-    @Published var hasValidEndpoint: Bool = false
-    // Add a method to save endpoints to UserDefaults
-    private func saveEndpoints() {
-        if let encodedData = try? JSONEncoder().encode(savedEndpoints) {
-            UserDefaults.standard.set(encodedData, forKey: "savedEndpoints")
-        }
-    }
     
-    // Dictionary to store API tokens for each endpoint
-    @Published var endpointTokens: [String: String] = {
-        if let data = UserDefaults.standard.data(forKey: "endpointTokens"),
-           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-            return decoded
-        }
-        return [:]
-    }() {
-        didSet {
-            if let encoded = try? JSONEncoder().encode(endpointTokens) {
-                UserDefaults.standard.set(encoded, forKey: "endpointTokens")
-            }
-        }
-    }
+    // MARK: - Endpoint Management
     
     @Published var apiToken: String {
         didSet { UserDefaults.standard.set(apiToken, forKey: "apiToken") }
@@ -106,55 +266,13 @@ class AppStorageManager: ObservableObject {
         didSet { UserDefaults.standard.set(apiEndpoint, forKey: "apiEndpoint") }
     }
     
-    @Published var systemPrompt: String {
-        didSet { UserDefaults.standard.set(systemPrompt, forKey: "systemPrompt") }
-    }
-    
-    @Published var userPrompt: String {
-        didSet { UserDefaults.standard.set(userPrompt, forKey: "userPrompt") }
-    }
-    
     // For backward compatibility
     var prompt: String {
         get { return systemPrompt }
         set { systemPrompt = newValue }
     }
     
-    @Published var savedPrompts: [SavedPrompt] = [] {
-        didSet {
-            if let encoded = try? JSONEncoder().encode(savedPrompts) {
-                UserDefaults.standard.set(encoded, forKey: "savedPrompts")
-            }
-        }
-    }
-    
-    @Published var savedEndpoints: [SavedEndpoint] = [] {
-        didSet {
-            if let encoded = try? JSONEncoder().encode(savedEndpoints) {
-                UserDefaults.standard.set(encoded, forKey: "savedEndpoints")
-            }
-        }
-    }
-    
-    @Published var defaultEndpointID: UUID? {
-        didSet {
-            if let id = defaultEndpointID {
-                UserDefaults.standard.set(id.uuidString, forKey: "defaultEndpointID")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "defaultEndpointID")
-            }
-        }
-    }
-    
-    @Published var defaultPromptID: UUID? {
-        didSet {
-            if let id = defaultPromptID {
-                UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "defaultPromptID")
-            }
-        }
-    }
+    // Properties are already declared above
     @Published var preferredLanguage: String {
         didSet { UserDefaults.standard.set(preferredLanguage, forKey: "preferredLanguage") }
     }
@@ -169,13 +287,13 @@ class AppStorageManager: ObservableObject {
         didSet { UserDefaults.standard.set(temperature, forKey: "temperature") }
     }
 
-    init() {
-        self.apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
-        self.apiEndpoint = UserDefaults.standard.string(forKey: "apiEndpoint") ?? ""
-        self.systemPrompt = UserDefaults.standard.string(forKey: "systemPrompt") ?? "You are a helpful AI assistant."
-        self.userPrompt = UserDefaults.standard.string(forKey: "userPrompt") ?? ""
-        self.temperature = UserDefaults.standard.double(forKey: "temperature") != 0 ? UserDefaults.standard.double(forKey: "temperature") : 1.0
-        self.preferredLanguage = UserDefaults.standard.string(forKey: "preferredLanguage") ?? "English"
+    // MARK: - Model Loading
+    
+    func loadInitialModels() {
+        // Load initial models
+        if let endpointID = defaultEndpointID {
+            checkEndpointAndFetchModels(endpointID: endpointID) { _ in }
+        }
         self.preferredModel = UserDefaults.standard.string(forKey: "preferredModel") ?? "gpt-3.5-turbo"
         self.useChatEndpoint = UserDefaults.standard.bool(forKey: "useChatEndpoint")
         
@@ -205,15 +323,6 @@ class AppStorageManager: ObservableObject {
             self.savedEndpoints = decodedEndpoints
         } else {
             // Add default endpoints if none exist
-            let openAIEndpoint = SavedEndpoint(name: "OpenAI", url: "https://api.openai.com/v1/chat/completions", isChatEndpoint: true, requiresAuth: true, defaultModel: "gpt-3.5-turbo")
-            let anthropicEndpoint = SavedEndpoint(name: "Anthropic", url: "https://api.anthropic.com/v1/messages", isChatEndpoint: true, requiresAuth: true, defaultModel: "claude-3-opus-20240229")
-            
-            self.savedEndpoints = [openAIEndpoint, anthropicEndpoint]
-            
-            // Set OpenAI as the default endpoint if no default is set
-            if self.defaultEndpointID == nil {
-                self.defaultEndpointID = openAIEndpoint.id
-            }
         }
         
         // If we have a default endpoint, use it on startup
@@ -237,10 +346,58 @@ class AppStorageManager: ObservableObject {
         }
     }
     
+    /// Initializes default endpoints if none exist
+    func initializeDefaultEndpoints() {
+        guard savedEndpoints.isEmpty else { return }
+        
+        let openAIEndpoint = SavedEndpoint(
+            name: "OpenAI",
+            url: "https://api.openai.com",
+            defaultModel: "gpt-3.5-turbo",
+            requiresAuth: true,
+            endpointType: .openAI,
+            isChatEndpoint: true
+        )
+        
+        let localModelEndpoint = SavedEndpoint(
+            name: "Local Model",
+            url: "",
+            defaultModel: "local-model",
+            requiresAuth: false,
+            endpointType: .localModel,
+            isChatEndpoint: true
+        )
+        
+        savedEndpoints = [openAIEndpoint, localModelEndpoint]
+        defaultEndpointID = openAIEndpoint.id
+    }
+    
     // MARK: - Endpoint Validation
     
-    func checkEndpointAndFetchModels(completion: @escaping (Bool) -> Void) {
-        guard !apiEndpoint.isEmpty else {
+    /// Checks if an endpoint is valid and fetches available models
+    /// - Parameters:
+    ///   - endpointID: Optional endpoint ID to check (uses selected endpoint if nil)
+    ///   - completion: Completion handler with success status
+    func checkEndpointAndFetchModels(endpointID: UUID? = nil, completion: @escaping (Bool) -> Void) {
+        let endpointID = endpointID ?? defaultEndpointID
+        
+        guard let endpoint = savedEndpoints.first(where: { $0.id == endpointID }) else {
+            hasValidEndpoint = false
+            availableModels = []
+            completion(false)
+            return
+        }
+        
+        // Handle local models
+        if endpoint.isLocalModel {
+            hasValidEndpoint = true
+            availableModels = [endpoint.defaultModel]
+            completion(true)
+            return
+        }
+        
+        // Handle remote endpoints
+        guard !endpoint.url.isEmpty else {
             hasValidEndpoint = false
             availableModels = []
             completion(false)
@@ -248,7 +405,7 @@ class AppStorageManager: ObservableObject {
         }
         
         // Extract the base URL from the endpoint URL
-        var baseURL = apiEndpoint
+        var baseURL = endpoint.url
         
         // Clean the base URL - remove any path components after /v1/
         if baseURL.contains("/v1/") {
@@ -360,65 +517,133 @@ class AppStorageManager: ObservableObject {
     
     // MARK: - Prompt Management
     
+    // Main addPrompt method with support for both system and user prompts
     func addPrompt(name: String, systemPrompt: String, userPrompt: String = "") {
         let newPrompt = SavedPrompt(name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
         savedPrompts.append(newPrompt)
+        savePrompts()
     }
     
     // Backward compatibility method
-    func addPrompt(name: String, content: String) {
-        let newPrompt = SavedPrompt(name: name, systemPrompt: content)
-        savedPrompts.append(newPrompt)
+    func addPrompt(name: String, content: String, role: String = "system") {
+        // Convert old format to new format
+        if role == "system" {
+            addPrompt(name: name, systemPrompt: content, userPrompt: "")
+        } else {
+            addPrompt(name: name, systemPrompt: "", userPrompt: content)
+        }
     }
     
-    func updatePrompt(id: UUID, name: String, systemPrompt: String, userPrompt: String = "") {
+    // Backward compatibility method - converts to new SavedPrompt format
+    func updatePrompt(id: UUID, name: String, content: String, role: String = "system") {
         if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
-            savedPrompts[index] = SavedPrompt(id: id, name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
+            let systemPrompt = role == "system" ? content : savedPrompts[index].systemPrompt
+            let userPrompt = role == "user" ? content : savedPrompts[index].userPrompt
+            
+            let updatedPrompt = SavedPrompt(
+                id: id,
+                name: name,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                lastUsed: savedPrompts[index].lastUsed,
+                createdAt: savedPrompts[index].createdAt
+            )
+            
+            updatePrompt(updatedPrompt)
         }
     }
     
     // Backward compatibility method
     func updatePrompt(id: UUID, name: String, content: String) {
+        // Call the more comprehensive method with system role as default
+        updatePrompt(id: id, name: name, content: content, role: "system")
+    }
+    
+    // New method to update both system and user prompts
+    func updatePrompt(id: UUID, name: String, systemPrompt: String, userPrompt: String) {
         if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
-            // Preserve the existing userPrompt if there is one
-            let existingUserPrompt = savedPrompts[index].userPrompt
-            savedPrompts[index] = SavedPrompt(id: id, name: name, systemPrompt: content, userPrompt: existingUserPrompt)
+            let updatedPrompt = SavedPrompt(
+                id: id,
+                name: name,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                lastUsed: savedPrompts[index].lastUsed,
+                createdAt: savedPrompts[index].createdAt
+            )
+            
+            updatePrompt(updatedPrompt)
         }
     }
     
     func deletePrompt(at indexSet: IndexSet) {
         savedPrompts.remove(atOffsets: indexSet)
+        savePrompts()
     }
     
-    func selectPrompt(id: UUID) {
-        if let selectedPrompt = savedPrompts.first(where: { $0.id == id }) {
-            systemPrompt = selectedPrompt.systemPrompt
-            userPrompt = selectedPrompt.userPrompt
-        }
-    }
+    // Duplicate selectPrompt method removed - using the first implementation above
     
-    func setDefaultPrompt(id: UUID) {
-        if savedPrompts.contains(where: { $0.id == id }) {
-            defaultPromptID = id
-            objectWillChange.send()
-        }
-    }
+    // Duplicate setDefaultPrompt method removed - using the first implementation above
     
     // MARK: - Endpoint Management
     
+    /// Adds a new endpoint
+    /// - Parameters:
+    ///   - name: Display name of the endpoint
+    ///   - url: URL or local path for the endpoint
+    ///   - endpointType: Type of the endpoint
+    ///   - isChatEndpoint: Whether it's a chat endpoint
+    ///   - requiresAuth: Whether authentication is required
+    ///   - defaultModel: Default model to use
+    ///   - temperature: Default temperature setting
+    ///   - organizationID: Optional organization ID
+    ///   - maxTokens: Maximum tokens for local models
+    /// - Returns: The created endpoint
     @discardableResult
-    func addEndpoint(name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String, temperature: Double = 1.0) -> UUID {
-        let newEndpoint = SavedEndpoint(name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel, temperature: temperature)
+    func addEndpoint(
+        name: String,
+        url: String,
+        endpointType: EndpointType = .openAI,
+        isChatEndpoint: Bool = true,
+        requiresAuth: Bool = true,
+        defaultModel: String = "gpt-3.5-turbo",
+        temperature: Double = 1.0,
+        organizationID: String? = nil,
+        maxTokens: Int? = 2048
+    ) -> SavedEndpoint {
+        let newEndpoint = SavedEndpoint(
+            name: name,
+            url: url,
+            defaultModel: defaultModel,
+            maxTokens: maxTokens,
+            requiresAuth: requiresAuth,
+            organizationID: organizationID,
+            endpointType: endpointType,
+            isChatEndpoint: isChatEndpoint,
+            temperature: temperature
+        )
+        
         savedEndpoints.append(newEndpoint)
-        saveEndpoints()
-        // Notify observers that endpoints have changed
-        objectWillChange.send()
-        return newEndpoint.id
+        
+        // If this is the first endpoint, set it as default
+        if savedEndpoints.count == 1 {
+            defaultEndpointID = newEndpoint.id
+        }
+        
+        return newEndpoint
     }
     
     func updateEndpoint(id: UUID, name: String, url: String, isChatEndpoint: Bool, requiresAuth: Bool, defaultModel: String, temperature: Double) {
         if let index = savedEndpoints.firstIndex(where: { $0.id == id }) {
-            savedEndpoints[index] = SavedEndpoint(id: id, name: name, url: url, isChatEndpoint: isChatEndpoint, requiresAuth: requiresAuth, defaultModel: defaultModel, temperature: temperature)
+            savedEndpoints[index] = SavedEndpoint(
+                id: id,
+                name: name,
+                url: url,
+                defaultModel: defaultModel,
+                requiresAuth: requiresAuth,
+                endpointType: savedEndpoints[index].endpointType,
+                isChatEndpoint: isChatEndpoint,
+                temperature: temperature
+            )
             saveEndpoints()
             // Notify observers that endpoints have changed
             objectWillChange.send()
@@ -432,51 +657,20 @@ class AppStorageManager: ObservableObject {
         objectWillChange.send()
     }
     
-    func selectEndpoint(id: UUID) {
-        if let selectedEndpoint = savedEndpoints.first(where: { $0.id == id }) {
-            // Simply use the URL as stored
-            apiEndpoint = selectedEndpoint.url
-            useChatEndpoint = selectedEndpoint.isChatEndpoint
-            preferredModel = selectedEndpoint.defaultModel
-            temperature = selectedEndpoint.temperature
-            
-            // Set the API token for this endpoint if it exists and requires auth
-            if selectedEndpoint.requiresAuth {
-                let storedToken = endpointTokens[id.uuidString] ?? ""
-                apiToken = storedToken
-                
-                // Debug logging
-                if !storedToken.isEmpty {
-                    print("Retrieved API token for endpoint \(selectedEndpoint.name): \(storedToken.prefix(5))...\(storedToken.suffix(5))")
-                } else {
-                    print("No API token found for endpoint \(selectedEndpoint.name)")
-                }
-            } else {
-                // Clear the API token if the endpoint doesn't require auth
-                apiToken = ""
-                print("Cleared API token for endpoint \(selectedEndpoint.name) as it doesn't require auth")
-            }
-            
-            // Ensure the changes are immediately applied
-            UserDefaults.standard.set(apiEndpoint, forKey: "apiEndpoint")
-            UserDefaults.standard.set(useChatEndpoint, forKey: "useChatEndpoint")
-            UserDefaults.standard.set(preferredModel, forKey: "preferredModel")
-            UserDefaults.standard.set(temperature, forKey: "temperature")
-            UserDefaults.standard.set(apiToken, forKey: "apiToken")
-            
-            // Notify observers that the endpoint has changed
-            objectWillChange.send()
+    /// Selects an endpoint to use
+    /// - Parameter id: ID of the endpoint to select
+    /// - Returns: True if the endpoint was found and selected
+    @discardableResult
+    func selectEndpoint(id: UUID) -> Bool {
+        guard savedEndpoints.contains(where: { $0.id == id }) else {
+            return false
         }
+        
+        defaultEndpointID = id
+        return true
     }
     
-    func setDefaultEndpoint(id: UUID) {
-        if savedEndpoints.contains(where: { $0.id == id }) {
-            defaultEndpointID = id
-            UserDefaults.standard.set(id.uuidString, forKey: "defaultEndpointID")
-            // Notify observers that the default endpoint has changed
-            objectWillChange.send()
-        }
-    }
+    // Duplicate setDefaultEndpoint method removed - using the first implementation above
     
     func moveEndpoint(from source: IndexSet, to destination: Int) {
         savedEndpoints.move(fromOffsets: source, toOffset: destination)

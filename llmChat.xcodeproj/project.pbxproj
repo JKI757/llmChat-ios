@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		03FBDAFD2D7B637F00FE436A /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 03FBDAFC2D7B637F00FE436A /* MarkdownUI */; };
+		032AFE0A2DED17A700A91D51 /* SwiftOpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 032AFE092DED17A700A91D51 /* SwiftOpenAI */; };
+		032AFE0D2DED17C000A91D51 /* LLM in Frameworks */ = {isa = PBXBuildFile; productRef = 032AFE0C2DED17C000A91D51 /* LLM */; };
+		032AFE102DED17D000A91D51 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 032AFE0F2DED17D000A91D51 /* MarkdownUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +30,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		03E45F732DED16A300254F5A /* libcmark-gfm.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libcmark-gfm.tbd"; path = "usr/lib/libcmark-gfm.tbd"; sourceTree = SDKROOT; };
 		03FBDABA2D7B616000FE436A /* llmChat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = llmChat.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		03FBDACF2D7B616200FE436A /* llmChatTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = llmChatTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		03FBDAD92D7B616200FE436A /* llmChatUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = llmChatUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -69,7 +72,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				03FBDAFD2D7B637F00FE436A /* MarkdownUI in Frameworks */,
+				032AFE102DED17D000A91D51 /* MarkdownUI in Frameworks */,
+				032AFE0D2DED17C000A91D51 /* LLM in Frameworks */,
+				032AFE0A2DED17A700A91D51 /* SwiftOpenAI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -90,12 +95,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		03E45F722DED16A300254F5A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				03E45F732DED16A300254F5A /* libcmark-gfm.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		03FBDAB12D7B616000FE436A = {
 			isa = PBXGroup;
 			children = (
 				03FBDABC2D7B616000FE436A /* llmChat */,
 				03FBDAD22D7B616200FE436A /* llmChatTests */,
 				03FBDADC2D7B616200FE436A /* llmChatUITests */,
+				03E45F722DED16A300254F5A /* Frameworks */,
 				03FBDABB2D7B616000FE436A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -130,7 +144,9 @@
 			);
 			name = llmChat;
 			packageProductDependencies = (
-				03FBDAFC2D7B637F00FE436A /* MarkdownUI */,
+				032AFE092DED17A700A91D51 /* SwiftOpenAI */,
+				032AFE0C2DED17C000A91D51 /* LLM */,
+				032AFE0F2DED17D000A91D51 /* MarkdownUI */,
 			);
 			productName = llmChat;
 			productReference = 03FBDABA2D7B616000FE436A /* llmChat.app */;
@@ -215,7 +231,9 @@
 			mainGroup = 03FBDAB12D7B616000FE436A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				03FBDAFB2D7B637F00FE436A /* XCRemoteSwiftPackageReference "MarkdownUI" */,
+				032AFE082DED17A700A91D51 /* XCRemoteSwiftPackageReference "SwiftOpenAI" */,
+				032AFE0B2DED17C000A91D51 /* XCRemoteSwiftPackageReference "LLM" */,
+				032AFE0E2DED17D000A91D51 /* XCRemoteSwiftPackageReference "MarkdownUI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 03FBDABB2D7B616000FE436A /* Products */;
@@ -584,7 +602,23 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		03FBDAFB2D7B637F00FE436A /* XCRemoteSwiftPackageReference "MarkdownUI" */ = {
+		032AFE082DED17A700A91D51 /* XCRemoteSwiftPackageReference "SwiftOpenAI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jamesrochabrun/SwiftOpenAI";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+		032AFE0B2DED17C000A91D51 /* XCRemoteSwiftPackageReference "LLM" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/eastriverlee/LLM.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.4.3;
+			};
+		};
+		032AFE0E2DED17D000A91D51 /* XCRemoteSwiftPackageReference "MarkdownUI" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/gonzalezreal/MarkdownUI";
 			requirement = {
@@ -595,9 +629,19 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		03FBDAFC2D7B637F00FE436A /* MarkdownUI */ = {
+		032AFE092DED17A700A91D51 /* SwiftOpenAI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 03FBDAFB2D7B637F00FE436A /* XCRemoteSwiftPackageReference "MarkdownUI" */;
+			package = 032AFE082DED17A700A91D51 /* XCRemoteSwiftPackageReference "SwiftOpenAI" */;
+			productName = SwiftOpenAI;
+		};
+		032AFE0C2DED17C000A91D51 /* LLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 032AFE0B2DED17C000A91D51 /* XCRemoteSwiftPackageReference "LLM" */;
+			productName = LLM;
+		};
+		032AFE0F2DED17D000A91D51 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 032AFE0E2DED17D000A91D51 /* XCRemoteSwiftPackageReference "MarkdownUI" */;
 			productName = MarkdownUI;
 		};
 /* End XCSwiftPackageProductDependency section */

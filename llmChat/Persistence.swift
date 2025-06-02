@@ -14,9 +14,19 @@ struct PersistenceController {
     static let preview: PersistenceController = {
         let result = PersistenceController(inMemory: true)
         let viewContext = result.container.viewContext
-        for _ in 0..<10 {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
+        for i in 0..<3 {
+            let newConversation = Conversation(context: viewContext)
+            newConversation.timestamp = Date()
+            newConversation.title = "Sample Conversation \(i+1)"
+            newConversation.model = "gpt-3.5-turbo"
+            newConversation.language = "English"
+            
+            // Add a sample message to each conversation
+            let message = Message(context: viewContext)
+            message.content = "This is a sample message"
+            message.role = "assistant"
+            message.timestamp = Date()
+            message.conversation = newConversation
         }
         do {
             try viewContext.save()
