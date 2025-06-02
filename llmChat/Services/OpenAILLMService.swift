@@ -81,7 +81,7 @@ final class OpenAILLMService: LLMServiceProtocol {
                     ]
                     
                     // Create the request
-                    var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+                    var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
                     request.httpMethod = "POST"
                     request.addValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -209,7 +209,7 @@ final class OpenAILLMService: LLMServiceProtocol {
                     ]
                     
                     // Create the request
-                    var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+                    var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
                     request.httpMethod = "POST"
                     request.addValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

@@ -12,6 +12,7 @@ class ChatViewModel: ObservableObject {
     @Published var selectedImage: UIImage? = nil
     @Published var selectedModel: String = "gpt-3.5-turbo"
     @Published var selectedEndpoint: UUID?
+    @Published var streamingContent: String = "" // Track streaming content for UI updates
     @Published var selectedPromptID: UUID? {
         didSet {
             // Update the default prompt ID in storage when changed
@@ -432,7 +433,7 @@ class ChatViewModel: ObservableObject {
                 
                 // Create the request body
                 let requestBody: [String: Any] = [
-                    "model": selectedModel, // Use vision model
+                    "model": selectedModel,
                     "messages": openAIMessages,
                     "temperature": temperature,
                     "max_tokens": 1000,
@@ -687,6 +688,11 @@ class ChatViewModel: ObservableObject {
     
     private func updateLastMessage(with content: String) {
         guard !messages.isEmpty else { return }
+        
+        // Update the streaming content for real-time updates
+        streamingContent = content
+        
+        // Update the actual message
         messages[messages.count - 1] = ChatMessage(content: content, role: "assistant", isError: false)
     }
     

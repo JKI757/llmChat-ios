@@ -68,6 +68,7 @@ struct ChatView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(viewModel.messages) { message in
                                 MessageBubble(message: message)
+                                    .environmentObject(viewModel)
                                     .id(message.id)
                                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                                     .padding(.vertical, 4)
@@ -83,8 +84,24 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: viewModel.messages) { _ in
+                    // Scroll to bottom whenever messages change
                     withAnimation {
                         proxy.scrollTo(scrollBottomID, anchor: .bottom)
+                    }
+                }
+                // Also scroll when streaming updates happen
+                .onChange(of: viewModel.streamingContent) { _ in
+                    // Scroll to bottom whenever streaming content changes
+                    withAnimation {
+                        proxy.scrollTo(scrollBottomID, anchor: .bottom)
+                    }
+                }
+                // Scroll when view appears
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        withAnimation {
+                            proxy.scrollTo(scrollBottomID, anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -430,6 +447,7 @@ struct ChatView: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
+    @EnvironmentObject var viewModel: ChatViewModel
     @Environment(\.colorScheme) private var colorScheme
     
     private var backgroundColor: Color {
@@ -450,6 +468,17 @@ struct MessageBubble: View {
         } else {
             return .primary
         }
+    }
+    
+    // Check if this is the last assistant message that should show streaming content
+    private var isLastAssistantMessage: Bool {
+        guard !message.isUser && !message.isError else { return false }
+        
+        if let lastAssistantMessage = viewModel.messages.last(where: { !$0.isUser && !$0.isError }),
+           lastAssistantMessage.id == message.id {
+            return true
+        }
+        return false
     }
     
     var body: some View {
@@ -478,21 +507,42 @@ struct MessageBubble: View {
                 Group {
                     switch message.content {
                     case .text(let textContent):
-                        Markdown(textContent)
-                            .markdownTheme(.gitHub)
-                            .foregroundColor(textColor)
-                            .font(.body)
-                            .padding(12)
-                            .background(backgroundColor)
-                            .cornerRadius(12)
-                            .textSelection(.enabled)
-                            .contextMenu {
-                                Button(action: {
-                                    UIPasteboard.general.string = textContent
-                                }) {
-                                    Label("Copy", systemImage: "doc.on.doc")
+                        // If this is the last assistant message and we're sending, use streaming content
+                        if isLastAssistantMessage && viewModel.isSending {
+                            Markdown(viewModel.streamingContent)
+                                .markdownTheme(.gitHub)
+                                .foregroundColor(textColor)
+                                .font(.body)
+                                .padding(12)
+                                .background(backgroundColor)
+                                .cornerRadius(12)
+                                .textSelection(.enabled)
+                                .contextMenu {
+                                    Button(action: {
+                                        UIPasteboard.general.string = viewModel.streamingContent
+                                    }) {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
                                 }
-                            }
+                                .animation(.easeInOut, value: viewModel.streamingContent)
+                        } else {
+                            // Regular display for completed messages
+                            Markdown(textContent)
+                                .markdownTheme(.gitHub)
+                                .foregroundColor(textColor)
+                                .font(.body)
+                                .padding(12)
+                                .background(backgroundColor)
+                                .cornerRadius(12)
+                                .textSelection(.enabled)
+                                .contextMenu {
+                                    Button(action: {
+                                        UIPasteboard.general.string = textContent
+                                    }) {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+                                }
+                        }
                     case .image(let base64Image):
                         if let imageData = Data(base64Encoded: base64Image),
                            let uiImage = UIImage(data: imageData) {
