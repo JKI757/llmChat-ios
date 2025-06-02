@@ -13,6 +13,8 @@ import CoreData
 extension Notification.Name {
     static let defaultEndpointChanged = Notification.Name("defaultEndpointChanged")
     static let endpointUpdated = Notification.Name("endpointUpdated")
+    static let languageChanged = Notification.Name("languageChanged")
+    static let defaultPromptChanged = Notification.Name("defaultPromptChanged")
 }
 
 // MARK: - Saved Prompt Model
@@ -93,6 +95,15 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         }
     }
     
+    @Published var preferredLanguage: Language = .system {
+        didSet {
+            if let encoded = try? JSONEncoder().encode(preferredLanguage) {
+                UserDefaults.standard.set(encoded, forKey: "preferredLanguage")
+                NotificationCenter.default.post(name: .languageChanged, object: preferredLanguage)
+            }
+        }
+    }
+    
     @Published var savedEndpoints: [SavedEndpoint] = []
     @Published var defaultEndpointID: UUID?
     @Published var defaultPromptID: UUID?
@@ -107,7 +118,13 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         // Initialize properties with default values
         self.apiToken = UserDefaults.standard.string(forKey: "apiToken") ?? ""
         self.apiEndpoint = UserDefaults.standard.string(forKey: "apiEndpoint") ?? "https://api.openai.com/v1"
-        self.preferredLanguage = UserDefaults.standard.string(forKey: "preferredLanguage") ?? "en"
+        // Load preferredLanguage from UserDefaults
+        if let languageData = UserDefaults.standard.data(forKey: "preferredLanguage"),
+           let decodedLanguage = try? JSONDecoder().decode(Language.self, from: languageData) {
+            self.preferredLanguage = decodedLanguage
+        } else {
+            self.preferredLanguage = .english
+        }
         self.preferredModel = UserDefaults.standard.string(forKey: "preferredModel") ?? "gpt-3.5-turbo"
         self.useChatEndpoint = UserDefaults.standard.bool(forKey: "useChatEndpoint")
         self.temperature = UserDefaults.standard.double(forKey: "temperature")
@@ -147,6 +164,12 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         self.userPrompt = UserDefaults.standard.string(forKey: "userPrompt") ?? ""
         self.defaultEndpointID = UUID(uuidString: UserDefaults.standard.string(forKey: "defaultEndpointID") ?? "")
         self.defaultPromptID = UUID(uuidString: UserDefaults.standard.string(forKey: "defaultPromptID") ?? "")
+        
+        // Load preferred language
+        if let languageData = UserDefaults.standard.data(forKey: "preferredLanguage"),
+           let language = try? JSONDecoder().decode(Language.self, from: languageData) {
+            self.preferredLanguage = language
+        }
     }
     
     // MARK: - Token Management
@@ -258,9 +281,6 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
             self.userPrompt = prompt.userPrompt
             UserDefaults.standard.set(prompt.systemPrompt, forKey: "systemPrompt")
             UserDefaults.standard.set(prompt.userPrompt, forKey: "userPrompt")
-            
-            // Update last used timestamp
-            updatePrompt(prompt.withUpdatedLastUsed())
         }
     }
     
@@ -268,12 +288,72 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         if savedPrompts.contains(where: { $0.id == id }) {
             defaultPromptID = id
             UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
+            // If we have a prompt with this ID, update the system and user prompts
+            if let prompt = savedPrompts.first(where: { $0.id == id }) {
+                self.systemPrompt = prompt.systemPrompt
+                self.userPrompt = prompt.userPrompt
+                // Post notification that default prompt has changed
+                NotificationCenter.default.post(name: .defaultPromptChanged, object: id)
+            }
+        } else {
+            defaultPromptID = nil
+            UserDefaults.standard.removeObject(forKey: "defaultPromptID")
+        }
+    }
+
+    /// Adds a new prompt to the saved prompts list
+    func addPrompt(name: String, systemPrompt: String, userPrompt: String) {
+        let newPrompt = SavedPrompt(name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
+        savedPrompts.append(newPrompt)
+        savePrompts()
+    }
+
+    /// Updates an existing prompt
+    func updatePrompt(id: UUID, name: String, systemPrompt: String, userPrompt: String) {
+        if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
+            savedPrompts[index] = SavedPrompt(id: id, name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
+            savePrompts()
+
+            // If this was the default prompt, update the system and user prompts
+            if defaultPromptID == id {
+                self.systemPrompt = systemPrompt
+                self.userPrompt = userPrompt
+                NotificationCenter.default.post(name: .defaultPromptChanged, object: id)
+            }
+        }
+    }
+
+    /// Deletes prompts at the specified indices
+    func deletePrompts(at indexSet: IndexSet) {
+        // Check if we're deleting the default prompt
+        let promptsToDelete = indexSet.map { savedPrompts[$0] }
+        let deletingDefaultPrompt = promptsToDelete.contains(where: { $0.id == defaultPromptID })
+
+        // Remove the prompts
+        savedPrompts.remove(atOffsets: indexSet)
+        savePrompts()
+
+        // If we deleted the default prompt, clear the default
+        if deletingDefaultPrompt {
+            defaultPromptID = nil
+            UserDefaults.standard.removeObject(forKey: "defaultPromptID")
+        }
+    }
+
+    /// Saves the current default prompt ID to UserDefaults
+    func saveDefaultPromptID() {
+        if let id = defaultPromptID {
+            UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "defaultPromptID")
         }
     }
     
+    // This method is already defined elsewhere in the file
+
     // Models that don't support system prompts
     @Published var modelsWithoutSystemPrompt: [String] = ["o1", "o1-mini", "o1-preview"]
-    
+
     // Centralized list of supported languages
     static let supportedLanguages = ["English", "Spanish", "French", "German", "Mandarin", "Japanese", "Business Japanese", "Tagalog", "Taglish", "Korean", "Russian"]
     
@@ -301,10 +381,8 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         set { systemPrompt = newValue }
     }
     
-    // Properties are already declared above
-    @Published var preferredLanguage: String {
-        didSet { UserDefaults.standard.set(preferredLanguage, forKey: "preferredLanguage") }
-    }
+    // These properties are already declared above with proper types and didSet handlers
+    // Keeping only the ones that aren't duplicated
     @Published var preferredModel: String {
         didSet { UserDefaults.standard.set(preferredModel, forKey: "preferredModel") }
     }
@@ -357,7 +435,7 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         
         // If we have a default endpoint, use it on startup
         if let defaultID = self.defaultEndpointID,
-           let defaultEndpoint = self.savedEndpoints.first(where: { $0.id == defaultID }) {
+           self.savedEndpoints.contains(where: { $0.id == defaultID }) {
             self.selectEndpoint(id: defaultID)
         }
         
@@ -547,20 +625,21 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     
     // MARK: - Prompt Management
     
-    // Main addPrompt method with support for both system and user prompts
-    func addPrompt(name: String, systemPrompt: String, userPrompt: String = "") {
-        let newPrompt = SavedPrompt(name: name, systemPrompt: systemPrompt, userPrompt: userPrompt)
-        savedPrompts.append(newPrompt)
-        savePrompts()
-    }
+    // This method is already defined above with a slightly different signature
+    // Keeping this version with the default parameter for backward compatibility
+    // but removing the duplicate implementation
     
     // Backward compatibility method
     func addPrompt(name: String, content: String, role: String = "system") {
         // Convert old format to new format
         if role == "system" {
-            addPrompt(name: name, systemPrompt: content, userPrompt: "")
+            let newPrompt = SavedPrompt(name: name, systemPrompt: content, userPrompt: "")
+            savedPrompts.append(newPrompt)
+            savePrompts()
         } else {
-            addPrompt(name: name, systemPrompt: "", userPrompt: content)
+            let newPrompt = SavedPrompt(name: name, systemPrompt: "", userPrompt: content)
+            savedPrompts.append(newPrompt)
+            savePrompts()
         }
     }
     
@@ -590,25 +669,9 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     }
     
     // New method to update both system and user prompts
-    func updatePrompt(id: UUID, name: String, systemPrompt: String, userPrompt: String) {
-        if let index = savedPrompts.firstIndex(where: { $0.id == id }) {
-            let updatedPrompt = SavedPrompt(
-                id: id,
-                name: name,
-                systemPrompt: systemPrompt,
-                userPrompt: userPrompt,
-                lastUsed: savedPrompts[index].lastUsed,
-                createdAt: savedPrompts[index].createdAt
-            )
-            
-            updatePrompt(updatedPrompt)
-        }
-    }
+    // This method is already defined above, so we're removing this duplicate implementation
     
-    func deletePrompt(at indexSet: IndexSet) {
-        savedPrompts.remove(atOffsets: indexSet)
-        savePrompts()
-    }
+    // This method is already defined above as deletePrompts(at:)
     
     // Duplicate selectPrompt method removed - using the first implementation above
     

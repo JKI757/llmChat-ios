@@ -19,6 +19,7 @@ struct EndpointFormView: View {
     @State private var isImportingFile = false
     @State private var isLocalFileSelected = false
     @State private var selectedFileURL: URL?
+    @State private var defaultPromptID: UUID?
     
     private let endpoint: SavedEndpoint?
     
@@ -40,6 +41,7 @@ struct EndpointFormView: View {
         _apiToken = State(initialValue: endpoint?.id != nil ? viewModel.getToken(for: endpoint!.id) : "")
         _organizationID = State(initialValue: endpoint?.organizationID ?? "")
         _maxTokens = State(initialValue: endpoint?.maxTokens != nil ? "\(endpoint!.maxTokens!)" : "2048")
+        _defaultPromptID = State(initialValue: endpoint?.defaultPromptID)
     }
     
     // MARK: - Body
@@ -138,6 +140,29 @@ struct EndpointFormView: View {
                         }
                     }
                     .disabled(availableModels.isEmpty)
+                    
+                    // Default Prompt Picker
+                    VStack(alignment: .leading) {
+                        Text("Default Prompt")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Picker("Default Prompt", selection: $defaultPromptID) {
+                            Text("None").tag(nil as UUID?)
+                            
+                            ForEach(viewModel.savedPrompts.sorted(by: { $0.name < $1.name })) { prompt in
+                                Text(prompt.name).tag(prompt.id as UUID?)
+                            }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                        .disabled(viewModel.savedPrompts.isEmpty)
+                        
+                        if viewModel.savedPrompts.isEmpty {
+                            Text("No prompts available. Create prompts in Settings.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     
                     // List of available models
                     VStack(alignment: .leading) {
@@ -290,7 +315,8 @@ struct EndpointFormView: View {
             organizationID: orgID,
             endpointType: endpointType,
             isChatEndpoint: endpointType == .localModel ? true : isChatEndpoint,
-            temperature: temperature
+            temperature: temperature,
+            defaultPromptID: defaultPromptID
         )
         
         let token = (requiresAuth && !apiToken.isEmpty) ? apiToken : nil

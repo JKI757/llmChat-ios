@@ -11,6 +11,7 @@ class ChatViewModel: ObservableObject {
     @Published var showingError: Bool = false
     @Published var selectedModel: String = "gpt-3.5-turbo"
     @Published var selectedEndpoint: UUID?
+    @Published var selectedPromptID: UUID?
     @Published var availableModels: [String] = []
     @Published var isLoadingModels: Bool = false
     @Published var temperature: Double = 0.7
@@ -91,6 +92,22 @@ class ChatViewModel: ObservableObject {
             object: nil
         )
         
+        // Register for notifications when the default prompt changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDefaultPromptChanged),
+            name: .defaultPromptChanged,
+            object: nil
+        )
+        
+        // Register for notifications when the language changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleLanguageChanged),
+            name: .languageChanged,
+            object: nil
+        )
+        
         // Observe changes to the selected endpoint
         $selectedEndpoint
             .compactMap { $0 }
@@ -166,9 +183,29 @@ class ChatViewModel: ObservableObject {
                 // Get history without the last empty message
                 let history = Array(messages.dropLast())
                 
-                // Get system prompt and user prompt from storage
-                let systemPromptText = storage.systemPrompt
-                let userPromptText = storage.userPrompt
+                // Get system prompt and user prompt based on selection
+                var systemPromptText = storage.systemPrompt
+                var userPromptText = storage.userPrompt
+                
+                // If a specific prompt is selected for this chat, use it instead of the default
+                if let promptID = selectedPromptID, 
+                   let selectedPrompt = storage.savedPrompts.first(where: { $0.id == promptID }) {
+                    systemPromptText = selectedPrompt.systemPrompt
+                    userPromptText = selectedPrompt.userPrompt
+                } else if let endpointID = selectedEndpoint,
+                          let endpoint = storage.savedEndpoints.first(where: { $0.id == endpointID }),
+                          let defaultPromptID = endpoint.defaultPromptID,
+                          let defaultPrompt = storage.savedPrompts.first(where: { $0.id == defaultPromptID }) {
+                    // If no chat-specific prompt is selected but the endpoint has a default prompt, use that
+                    systemPromptText = defaultPrompt.systemPrompt
+                    userPromptText = defaultPrompt.userPrompt
+                }
+                
+                // Add language instruction if a specific language is selected
+                if storage.preferredLanguage != .system, 
+                   let languageInstruction = storage.preferredLanguage.promptInstruction {
+                    systemPromptText += "\n\n" + languageInstruction
+                }
                 
                 // Stream the response
                 var fullResponse = ""
@@ -272,7 +309,26 @@ class ChatViewModel: ObservableObject {
             
             // Update available models based on the updated endpoint
             updateAvailableModels(for: updatedEndpoint)
+            
+            // If the endpoint has a default prompt, update the selected prompt
+            if let promptID = updatedEndpoint.defaultPromptID {
+                selectedPromptID = promptID
+            }
         }
+    }
+    
+    @objc private func handleDefaultPromptChanged(_ notification: Notification) {
+        if let promptID = notification.object as? UUID {
+            // Update the selected prompt ID
+            selectedPromptID = promptID
+            print("ChatViewModel: Updated selected prompt ID to \(promptID)")
+        }
+    }
+    
+    @objc private func handleLanguageChanged(_ notification: Notification) {
+        // No need to store the language here as we'll get it directly from storage
+        // when sending messages
+        print("ChatViewModel: Language preference changed")
     }
     
     private func updateAvailableModels(for endpoint: SavedEndpoint) {

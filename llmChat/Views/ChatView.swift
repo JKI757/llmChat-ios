@@ -9,6 +9,8 @@ struct ChatView: View {
     // Model selection is now handled by the menu
     @State private var showingSettings = false
     @State private var showingClearConfirmation = false
+    @State private var showingModelSelection = false
+    @State private var showingPromptLibrary = false
     @State private var scrollToBottomID: UUID?
     
     private let scrollBottomID = UUID()
@@ -175,6 +177,97 @@ struct ChatView: View {
                 .buttonStyle(PlainButtonStyle())
                 .disabled(viewModel.availableModels.isEmpty)
                 
+                // Prompt and Language Selectors
+                HStack(spacing: 8) {
+                    // Prompt Selector
+                    Menu {
+                        Button(action: {
+                            viewModel.selectedPromptID = nil
+                        }) {
+                            HStack {
+                                Text("None")
+                                if viewModel.selectedPromptID == nil {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        
+                        ForEach(storage.savedPrompts.sorted(by: { $0.name < $1.name })) { prompt in
+                            Button(action: {
+                                viewModel.selectedPromptID = prompt.id
+                            }) {
+                                HStack {
+                                    Text(prompt.name)
+                                    if viewModel.selectedPromptID == prompt.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Divider()
+                        
+                        Button(action: { showingPromptLibrary = true }) {
+                            Label("Manage Prompts", systemImage: "pencil")
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "text.bubble")
+                                .imageScale(.small)
+                            
+                            Text(viewModel.selectedPromptID == nil ? "No Prompt" : 
+                                 storage.savedPrompts.first(where: { $0.id == viewModel.selectedPromptID })?.name ?? "Select Prompt")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            
+                            Image(systemName: "chevron.down")
+                                .imageScale(.small)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(16)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    // Language Selector
+                    Menu {
+                        ForEach(Language.allCases, id: \.self) { language in
+                            Button(action: {
+                                storage.preferredLanguage = language
+                            }) {
+                                HStack {
+                                    Text(language.localizedName)
+                                    if storage.preferredLanguage == language {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "globe")
+                                .imageScale(.small)
+                            
+                            Text(storage.preferredLanguage.localizedName)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            
+                            Image(systemName: "chevron.down")
+                                .imageScale(.small)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(16)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 4)
+                
                 HStack(alignment: .bottom, spacing: 8) {
                     // Attachment Button
                     Button(action: {}) {
@@ -254,6 +347,11 @@ struct ChatView: View {
         .sheet(isPresented: $showingSettings) {
             NavigationView {
                 SettingsView(viewModel: SettingsViewModel())
+            }
+        }
+        .sheet(isPresented: $showingPromptLibrary) {
+            NavigationView {
+                PromptsView()
             }
         }
         // Model selection is now handled by the menu

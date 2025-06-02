@@ -88,6 +88,46 @@ struct SettingsView: View {
                 }
             }
             
+            // Prompts Section
+            Section(header: Text("Prompts")) {
+                // Current prompt picker
+                if !storage.savedPrompts.isEmpty {
+                    Picker("Default Prompt", selection: Binding<UUID?>(  
+                        get: { storage.defaultPromptID },
+                        set: { storage.defaultPromptID = $0 }
+                    )) {
+                        Text("None").tag(nil as UUID?)
+                        
+                        ForEach(storage.savedPrompts.sorted(by: { $0.name < $1.name })) { prompt in
+                            Text(prompt.name).tag(prompt.id as UUID?)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                } else {
+                    Text("No saved prompts")
+                        .foregroundColor(.secondary)
+                }
+                
+                // Link to manage prompts
+                NavigationLink(destination: PromptsView()) {
+                    HStack {
+                        Image(systemName: "text.bubble")
+                            .foregroundColor(.blue)
+                        Text("Manage Prompts")
+                    }
+                }
+            }
+            
+            // Language Section
+            Section(header: Text("Language")) {
+                Picker("Response Language", selection: $storage.preferredLanguage) {
+                    ForEach(Language.allCases) { language in
+                        Text(language.localizedName).tag(language)
+                    }
+                }
+                .pickerStyle(MenuPickerStyle())
+            }
+            
             // Support Section
             Section(header: Text("Support")) {
                 Button(action: viewModel.sendFeedback) {

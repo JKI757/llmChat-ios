@@ -21,6 +21,11 @@ class EndpointsViewModel: ObservableObject {
         return savedEndpoints.sorted { $0.name < $1.name }
     }
     
+    var savedPrompts: [SavedPrompt] {
+        // Access the prompts through the storage manager
+        return storage.savedPrompts
+    }
+    
     var defaultEndpointID: UUID? {
         // Access the default endpoint ID through the storage manager
         let defaultID = storage.defaultEndpointID

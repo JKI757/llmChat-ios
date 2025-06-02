@@ -29,6 +29,9 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
     /// Type of endpoint
     var endpointType: EndpointType
     
+    /// Default prompt ID to use with this endpoint (optional)
+    var defaultPromptID: UUID?
+    
     /// Whether this endpoint supports chat completion format
     var isChatEndpoint: Bool
     
@@ -53,6 +56,7 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
         endpointType: EndpointType = .openAI,
         isChatEndpoint: Bool = true,
         temperature: Double = 1.0,
+        defaultPromptID: UUID? = nil,
         lastUsed: Date? = nil,
         createdAt: Date = Date()
     ) {
@@ -66,6 +70,7 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
         self.organizationID = organizationID
         self.endpointType = endpointType
         self.isChatEndpoint = isChatEndpoint
+        self.defaultPromptID = defaultPromptID
         self.temperature = temperature
         self.lastUsed = lastUsed
         self.createdAt = createdAt
@@ -96,6 +101,7 @@ extension SavedEndpoint {
     enum CodingKeys: String, CodingKey {
         case id, name, url, endpointType, isChatEndpoint, requiresAuth
         case defaultModel, availableModels, temperature, organizationID, maxTokens, lastUsed, createdAt
+        case defaultPromptID
     }
     
     init(from decoder: Decoder) throws {
@@ -117,6 +123,7 @@ extension SavedEndpoint {
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 1.0
         organizationID = try container.decodeIfPresent(String.self, forKey: .organizationID)
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        defaultPromptID = try container.decodeIfPresent(UUID.self, forKey: .defaultPromptID)
         lastUsed = try container.decodeIfPresent(Date.self, forKey: .lastUsed)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     }
