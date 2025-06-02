@@ -106,7 +106,17 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     
     @Published var savedEndpoints: [SavedEndpoint] = []
     @Published var defaultEndpointID: UUID?
-    @Published var defaultPromptID: UUID?
+    @Published var defaultPromptID: UUID? {
+        didSet {
+            if let id = defaultPromptID {
+                UserDefaults.standard.set(id.uuidString, forKey: "defaultPromptID")
+                NotificationCenter.default.post(name: .defaultPromptChanged, object: id)
+            } else {
+                UserDefaults.standard.removeObject(forKey: "defaultPromptID")
+                NotificationCenter.default.post(name: .defaultPromptChanged, object: nil)
+            }
+        }
+    }
     @Published var hasValidEndpoint: Bool = false
     @Published var availableModels: [String] = []
     @Published var selectedModel: String = ""

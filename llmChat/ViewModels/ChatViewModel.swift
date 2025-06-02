@@ -11,7 +11,14 @@ class ChatViewModel: ObservableObject {
     @Published var showingError: Bool = false
     @Published var selectedModel: String = "gpt-3.5-turbo"
     @Published var selectedEndpoint: UUID?
-    @Published var selectedPromptID: UUID?
+    @Published var selectedPromptID: UUID? {
+        didSet {
+            // Update the default prompt ID in storage when changed
+            if storage.defaultPromptID != selectedPromptID {
+                storage.defaultPromptID = selectedPromptID
+            }
+        }
+    }
     @Published var availableModels: [String] = []
     @Published var isLoadingModels: Bool = false
     @Published var temperature: Double = 0.7
@@ -71,6 +78,11 @@ class ChatViewModel: ObservableObject {
             // If no default is set, use the first available endpoint
             selectedEndpoint = firstEndpoint.id
             updateSelectedEndpoint(firstEndpoint.id)
+        }
+        
+        // Initialize with the default prompt if available
+        if let defaultPromptID = storage.defaultPromptID {
+            selectedPromptID = defaultPromptID
         }
         
         // Update error message based on current state
