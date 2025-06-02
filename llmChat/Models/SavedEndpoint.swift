@@ -64,7 +64,13 @@ struct SavedEndpoint: Identifiable, Codable, Hashable, Equatable {
         self.name = name
         self.url = url
         self.defaultModel = defaultModel
-        self.availableModels = availableModels.isEmpty && !defaultModel.isEmpty ? [defaultModel] : availableModels
+        
+        // Ensure we keep all available models and add the default model if needed
+        var models = availableModels
+        if !defaultModel.isEmpty && !models.contains(defaultModel) {
+            models.append(defaultModel)
+        }
+        self.availableModels = models
         self.maxTokens = maxTokens
         self.requiresAuth = requiresAuth
         self.organizationID = organizationID

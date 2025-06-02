@@ -186,7 +186,7 @@ struct MessageView: View {
             }
             
             if message.isError {
-                Text(message.content)
+                Text(message.content.textValue)
                     .foregroundColor(.red)
                     .padding(8)
                     .background(Color.red.opacity(0.1))
@@ -196,14 +196,45 @@ struct MessageView: View {
                             .stroke(Color.red.opacity(0.3), lineWidth: 1)
                     )
             } else {
-                Markdown(message.content)
-                    .padding(8)
-                    .background(message.isUser ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(message.isUser ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
-                    )
+                switch message.content {
+                case .text(let textContent):
+                    Markdown(textContent)
+                        .padding(8)
+                        .background(message.isUser ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(message.isUser ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                        )
+                case .image(let base64Image):
+                    if let imageData = Data(base64Encoded: base64Image),
+                       let uiImage = UIImage(data: imageData) {
+                        VStack(alignment: .center) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 240, maxHeight: 240)
+                                .cornerRadius(8)
+                                .padding(8)
+                                .background(message.isUser ? Color.blue.opacity(0.1) : Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(message.isUser ? Color.blue.opacity(0.3) : Color.gray.opacity(0.3), lineWidth: 1)
+                                )
+                            
+                            Text("[Image]")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Text("[Unable to load image]")
+                            .foregroundColor(.red)
+                            .padding(8)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
+                    }
+                }
             }
         }
     }

@@ -49,10 +49,21 @@ final class OpenAILLMService: LLMServiceProtocol {
                     
                     // Add conversation history
                     for chatMessage in history {
-                        messages.append([
-                            "role": chatMessage.role,
-                            "content": chatMessage.content
-                        ])
+                        // Handle different content types
+                        switch chatMessage.content {
+                        case .text(let textContent):
+                            messages.append([
+                                "role": chatMessage.role,
+                                "content": textContent
+                            ])
+                        case .image(let base64Image):
+                            // Skip image-only messages in history for regular chat completion
+                            // Or you could include a placeholder text
+                            messages.append([
+                                "role": chatMessage.role,
+                                "content": "[Image]"
+                            ])
+                        }
                     }
                     
                     // Add the new message
@@ -70,7 +81,7 @@ final class OpenAILLMService: LLMServiceProtocol {
                     ]
                     
                     // Create the request
-                    var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+                    var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
                     request.httpMethod = "POST"
                     request.addValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -165,10 +176,21 @@ final class OpenAILLMService: LLMServiceProtocol {
                     
                     // Add conversation history
                     for chatMessage in history {
-                        messages.append([
-                            "role": chatMessage.role,
-                            "content": chatMessage.content
-                        ])
+                        // Handle different content types
+                        switch chatMessage.content {
+                        case .text(let textContent):
+                            messages.append([
+                                "role": chatMessage.role,
+                                "content": textContent
+                            ])
+                        case .image(let base64Image):
+                            // Skip image-only messages in history for regular chat completion
+                            // Or you could include a placeholder text
+                            messages.append([
+                                "role": chatMessage.role,
+                                "content": "[Image]"
+                            ])
+                        }
                     }
                     
                     // Add the new message with user prompt if provided
@@ -187,7 +209,7 @@ final class OpenAILLMService: LLMServiceProtocol {
                     ]
                     
                     // Create the request
-                    var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+                    var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
                     request.httpMethod = "POST"
                     request.addValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

@@ -206,8 +206,23 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
     }
     
     private func saveEndpoints() {
+        // Debug logging to track models in endpoints
+        for endpoint in savedEndpoints {
+            if endpoint.endpointType == .customAPI {
+                print("Saving endpoint \(endpoint.name) with models: \(endpoint.availableModels)")
+            }
+        }
+        
         if let data = try? JSONEncoder().encode(savedEndpoints) {
             UserDefaults.standard.set(data, forKey: "savedEndpoints")
+            
+            // Verify saved data
+            if let savedData = UserDefaults.standard.data(forKey: "savedEndpoints"),
+               let decodedEndpoints = try? JSONDecoder().decode([SavedEndpoint].self, from: savedData) {
+                for endpoint in decodedEndpoints where endpoint.endpointType == .customAPI {
+                    print("Verified saved endpoint \(endpoint.name) with models: \(endpoint.availableModels)")
+                }
+            }
         }
     }
     

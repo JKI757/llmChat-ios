@@ -29,6 +29,14 @@ struct EndpointFormView: View {
         self.viewModel = viewModel
         self.endpoint = endpoint
         
+        // Debug: Log the endpoint models if it exists
+        if let endpoint = endpoint, endpoint.endpointType == .customAPI {
+            print("Loading endpoint with models: \(endpoint.availableModels.count)")
+            for (i, model) in endpoint.availableModels.enumerated() {
+                print("  Initial model \(i): \(model)")
+            }
+        }
+        
         // Initialize state properties
         _name = State(initialValue: endpoint?.name ?? "")
         _url = State(initialValue: endpoint?.url ?? "")
@@ -36,7 +44,14 @@ struct EndpointFormView: View {
         _isChatEndpoint = State(initialValue: endpoint?.isChatEndpoint ?? true)
         _requiresAuth = State(initialValue: endpoint?.requiresAuth ?? true)
         _defaultModel = State(initialValue: endpoint?.defaultModel ?? "")
-        _availableModels = State(initialValue: endpoint?.availableModels ?? [])
+        
+        // Create a copy of the available models to ensure proper state initialization
+        var initialModels = endpoint?.availableModels ?? []
+        if let defaultModel = endpoint?.defaultModel, !defaultModel.isEmpty, !initialModels.contains(defaultModel) {
+            initialModels.append(defaultModel)
+        }
+        _availableModels = State(initialValue: initialModels)
+        
         _temperature = State(initialValue: endpoint?.temperature ?? 0.7)
         _apiToken = State(initialValue: endpoint?.id != nil ? viewModel.getToken(for: endpoint!.id) : "")
         _organizationID = State(initialValue: endpoint?.organizationID ?? "")
@@ -177,7 +192,13 @@ struct EndpointFormView: View {
                                 Button(action: {
                                     // Don't allow removing the default model
                                     if model != defaultModel {
-                                        availableModels.removeAll { $0 == model }
+                                        // Create a new array without the removed model
+                                        var newModels = Array(availableModels)
+                                        newModels.removeAll { $0 == model }
+                                        availableModels = newModels
+                                        
+                                        print("Removed model: \(model)")
+                                        print("Remaining models: \(availableModels.count)")
                                     }
                                 }) {
                                     Image(systemName: "minus.circle.fill")
@@ -196,7 +217,14 @@ struct EndpointFormView: View {
                             Button(action: {
                                 let trimmedName = newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !trimmedName.isEmpty && !availableModels.contains(trimmedName) {
-                                    availableModels.append(trimmedName)
+                                    // Create a new array and append to ensure state update
+                                    var newModels = Array(availableModels)
+                                    newModels.append(trimmedName)
+                                    availableModels = newModels
+                                    
+                                    print("Added model: \(trimmedName)")
+                                    print("Current models: \(availableModels.count)")
+                                    
                                     // If this is the first model, make it the default
                                     if defaultModel.isEmpty {
                                         defaultModel = trimmedName
@@ -292,12 +320,20 @@ struct EndpointFormView: View {
         var modelsList: [String] = []
         if endpointType == .customAPI {
             // For custom APIs, use the user-defined list
-            modelsList = availableModels
+            // Create a new array to ensure we're working with a clean copy
+            modelsList = Array(availableModels)
+            
+            // Debug output to verify the models being saved
+            print("Saving models for custom API: \(modelsList.count) models")
+            for (i, model) in modelsList.enumerated() {
+                print("  Model \(i): \(model)")
+            }
             
             // Ensure the default model is in the list
             let trimmedDefault = defaultModel.trimmingCharacters(in: .whitespaces)
             if !trimmedDefault.isEmpty && !modelsList.contains(trimmedDefault) {
                 modelsList.append(trimmedDefault)
+                print("  Added default model: \(trimmedDefault)")
             }
         } else if !defaultModel.trimmingCharacters(in: .whitespaces).isEmpty {
             // For other types, just include the default model

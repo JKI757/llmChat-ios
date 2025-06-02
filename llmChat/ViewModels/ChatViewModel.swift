@@ -9,6 +9,7 @@ class ChatViewModel: ObservableObject {
     @Published var isSending: Bool = false
     @Published var errorMessage: String?
     @Published var showingError: Bool = false
+    @Published var selectedImage: UIImage? = nil
     @Published var selectedModel: String = "gpt-3.5-turbo"
     @Published var selectedEndpoint: UUID?
     @Published var selectedPromptID: UUID? {
@@ -157,7 +158,38 @@ class ChatViewModel: ObservableObject {
     
     // MARK: - Public Methods
     
+    // Convert UIImage to base64 string
+    private func convertImageToBase64(_ image: UIImage) -> String? {
+        // Resize image to reduce size while maintaining quality
+        let maxDimension: CGFloat = 800
+        let originalSize = image.size
+        var newSize = originalSize
+        
+        if originalSize.width > maxDimension || originalSize.height > maxDimension {
+            let widthRatio = maxDimension / originalSize.width
+            let heightRatio = maxDimension / originalSize.height
+            let ratio = min(widthRatio, heightRatio)
+            newSize = CGSize(width: originalSize.width * ratio, height: originalSize.height * ratio)
+        }
+        
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resizedImage = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        
+        // Convert to JPEG data with moderate compression
+        guard let imageData = resizedImage.jpegData(compressionQuality: 0.7) else { return nil }
+        return imageData.base64EncodedString()
+    }
+    
     func sendMessage() {
+        // Check if we have an image to send
+        if let image = selectedImage {
+            sendMessageWithImage(image)
+            return
+        }
+        
+        // Otherwise send a text-only message
         guard !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         let userMessage = ChatMessage(content: inputText, role: "user")
@@ -239,6 +271,247 @@ class ChatViewModel: ObservableObject {
                     // Update message
                     fullResponse += chunk
                     updateLastMessage(with: fullResponse)
+                }
+                
+                if !Task.isCancelled {
+                    // Save the conversation if needed
+                    saveConversationIfNeeded()
+                }
+            } catch {
+                if !Task.isCancelled {
+                    handleError(error)
+                }
+            }
+            
+            if !Task.isCancelled {
+                isSending = false
+            }
+        }
+    }
+    
+    func sendMessageWithImage(_ image: UIImage) {
+        // Convert image to base64
+        guard let base64Image = convertImageToBase64(image) else {
+            // Handle error
+            errorMessage = "Failed to process image"
+            showingError = true
+            return
+        }
+        
+        // Create a message with the image
+        let userMessage = ChatMessage(imageContent: base64Image, role: "user")
+        messages.append(userMessage)
+        
+        // Add text message if there's any
+        let textPrompt = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !textPrompt.isEmpty {
+            let textMessage = ChatMessage(content: textPrompt, role: "user")
+            messages.append(textMessage)
+        }
+        
+        // Clear input and selected image
+        let prompt = textPrompt.isEmpty ? "Analyze this image" : textPrompt
+        inputText = ""
+        selectedImage = nil
+        
+        // Start loading indicator
+        isSending = true
+        
+        // Create a placeholder for the assistant's response
+        let assistantMessage = ChatMessage(content: "", role: "assistant")
+        messages.append(assistantMessage)
+        
+        // Cancel any existing task
+        currentTask?.cancel()
+        currentService?.cancelRequest()
+        
+        // Start a new task for the API call
+        currentTask = Task {
+            do {
+                guard let service = currentService else {
+                    if storage.savedEndpoints.isEmpty {
+                        throw ChatError.noEndpointsConfigured
+                    } else if selectedEndpoint == nil {
+                        throw ChatError.noEndpointSelected
+                    } else {
+                        throw ChatError.noServiceAvailable
+                    }
+                }
+                
+                // Get history without the last empty message and without the image message
+                // We'll handle the image separately
+                let history = Array(messages.dropLast())
+                
+                // Get system prompt and user prompt based on selection
+                var systemPromptText = storage.systemPrompt
+                var userPromptText = storage.userPrompt
+                
+                // If a specific prompt is selected for this chat, use it instead of the default
+                if let promptID = selectedPromptID, 
+                   let selectedPrompt = storage.savedPrompts.first(where: { $0.id == promptID }) {
+                    systemPromptText = selectedPrompt.systemPrompt
+                    userPromptText = selectedPrompt.userPrompt
+                } else if let endpointID = selectedEndpoint,
+                          let endpoint = storage.savedEndpoints.first(where: { $0.id == endpointID }),
+                          let defaultPromptID = endpoint.defaultPromptID,
+                          let defaultPrompt = storage.savedPrompts.first(where: { $0.id == defaultPromptID }) {
+                    // If no chat-specific prompt is selected but the endpoint has a default prompt, use that
+                    systemPromptText = defaultPrompt.systemPrompt
+                    userPromptText = defaultPrompt.userPrompt
+                }
+                
+                // Add language instruction if a specific language is selected
+                if storage.preferredLanguage != .system, 
+                   let languageInstruction = storage.preferredLanguage.promptInstruction {
+                    systemPromptText += "\n\n" + languageInstruction
+                }
+                
+                // Stream the response
+                var fullResponse = ""
+                
+                // Prepare messages array for OpenAI with image content
+                var openAIMessages: [[String: Any]] = []
+                
+                // Add system prompt if provided
+                if !systemPromptText.isEmpty {
+                    openAIMessages.append([
+                        "role": "system",
+                        "content": systemPromptText
+                    ])
+                }
+                
+                // Add conversation history (excluding the image we're about to send)
+                for chatMessage in history.filter({ 
+                    if case .image = $0.content { return false }
+                    return true
+                }) {
+                    switch chatMessage.content {
+                    case .text(let text):
+                        openAIMessages.append([
+                            "role": chatMessage.role,
+                            "content": text
+                        ])
+                    case .image:
+                        // Skip images in history for now
+                        break
+                    }
+                }
+                
+                // Add the image message
+                let imageContent: [[String: Any]] = [
+                    [
+                        "type": "image_url",
+                        "image_url": [
+                            "url": "data:image/jpeg;base64," + base64Image
+                        ]
+                    ]
+                ]
+                
+                // Add text if provided
+                // Create the user content with proper structure for the vision API
+                var contentArray: [[String: Any]] = []
+                
+                // Add text content if prompt is not empty
+                if !prompt.isEmpty {
+                    contentArray.append(["type": "text", "text": prompt])
+                }
+                
+                // Add image content
+                contentArray.append([
+                    "type": "image_url",
+                    "image_url": ["url": "data:image/jpeg;base64," + base64Image]
+                ])
+                
+                // Create the user message
+                let userContent: [String: Any] = [
+                    "role": "user",
+                    "content": contentArray
+                ]
+                
+                openAIMessages.append(userContent)
+                
+                // Create the request body
+                let requestBody: [String: Any] = [
+                    "model": selectedModel, // Use vision model
+                    "messages": openAIMessages,
+                    "temperature": temperature,
+                    "max_tokens": 1000,
+                    "stream": true
+                ]
+                
+                // Get the endpoint
+                guard let endpointID = selectedEndpoint,
+                      let endpoint = storage.savedEndpoints.first(where: { $0.id == endpointID }) else {
+                    throw ChatError.noEndpointSelected
+                }
+                
+                // Create the URL
+                guard let baseURL = URL(string: endpoint.url) else {
+                    throw ChatError.invalidEndpointURL
+                }
+                
+                // Create the request
+                var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+                request.httpMethod = "POST"
+                request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+                
+                // Add API key
+                if let apiKey = storage.getToken(for: endpoint.id) {
+                    request.addValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
+                }
+                
+                // Add organization ID if available
+                if let orgID = endpoint.organizationID, !orgID.isEmpty {
+                    request.addValue(orgID, forHTTPHeaderField: "OpenAI-Organization")
+                }
+                
+                // Set request body
+                request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+                
+                // Create the session
+                let session = URLSession.shared
+                
+                // Send the request
+                let (data, response) = try await session.data(for: request)
+                
+                // Check the response
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw NSError(domain: "ChatViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+                }
+                
+                guard httpResponse.statusCode == 200 else {
+                    let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                    throw NSError(domain: "ChatViewModel", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+                }
+                
+                // Parse the response
+                if let responseString = String(data: data, encoding: .utf8) {
+                    // Split the response by lines
+                    let lines = responseString.components(separatedBy: "\n")
+                    
+                    for line in lines {
+                        // Skip empty lines
+                        guard !line.isEmpty else { continue }
+                        
+                        // Skip data: [DONE] lines
+                        guard !line.contains("[DONE]") else { continue }
+                        
+                        // Remove "data: " prefix
+                        let jsonString = line.replacingOccurrences(of: "data: ", with: "")
+                        
+                        // Parse the JSON
+                        if let jsonData = jsonString.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                           let choices = json["choices"] as? [[String: Any]],
+                           let choice = choices.first,
+                           let delta = choice["delta"] as? [String: Any],
+                           let content = delta["content"] as? String {
+                            
+                            // Update message
+                            fullResponse += content
+                            updateLastMessage(with: fullResponse)
+                        }
+                    }
                 }
                 
                 if !Task.isCancelled {
@@ -472,6 +745,7 @@ enum ChatError: LocalizedError {
     case unauthorized
     case invalidResponse
     case invalidModel
+    case invalidEndpointURL
     
     var errorDescription: String? {
         switch self {
@@ -491,6 +765,8 @@ enum ChatError: LocalizedError {
             return "Invalid response from the server."
         case .invalidModel:
             return "The selected model is not available."
+        case .invalidEndpointURL:
+            return "Invalid endpoint URL. Please check the URL format."
         }
     }
 }

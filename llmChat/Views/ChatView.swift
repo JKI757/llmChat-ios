@@ -1,5 +1,6 @@
 import SwiftUI
 import MarkdownUI
+import PhotosUI
 
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
@@ -12,6 +13,8 @@ struct ChatView: View {
     @State private var showingModelSelection = false
     @State private var showingPromptLibrary = false
     @State private var scrollToBottomID: UUID?
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var showingPhotoPicker = false
     
     private let scrollBottomID = UUID()
     
@@ -270,29 +273,67 @@ struct ChatView: View {
                 
                 HStack(alignment: .bottom, spacing: 8) {
                     // Attachment Button
-                    Button(action: {}) {
+                    PhotosPicker(selection: $photoPickerItem, matching: .images) {
                         Image(systemName: "plus.circle.fill")
                             .font(.title2)
                             .foregroundColor(.blue)
                     }
                     .padding(.leading, 8)
                     .padding(.bottom, 8)
+                    .onChange(of: photoPickerItem) { newItem in
+                        if let newItem = newItem {
+                            Task {
+                                if let data = try? await newItem.loadTransferable(type: Data.self),
+                                   let image = UIImage(data: data) {
+                                    await MainActor.run {
+                                        viewModel.selectedImage = image
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
-                    // Text Input
-                    ZStack(alignment: .trailing) {
-                        TextEditor(text: $viewModel.inputText)
-                            .frame(minHeight: 40, maxHeight: 120)
-                            .padding(8)
-                            .background(Color(.systemBackground))
-                            .cornerRadius(18)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            )
-                            .padding(.vertical, 8)
-                            .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.isSending)
-                            .opacity((viewModel.hasServiceError && viewModel.errorMessage != nil) ? 0.6 : 1.0)
+                    // Text Input and Image Preview
+                    VStack(spacing: 4) {
+                        // Image Preview (if selected)
+                        if let selectedImage = viewModel.selectedImage {
+                            HStack {
+                                Image(uiImage: selectedImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 60, height: 60)
+                                    .cornerRadius(8)
+                                    .clipped()
+                                
+                                Spacer()
+                                
+                                Button(action: {
+                                    viewModel.selectedImage = nil
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .font(.title3)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.top, 4)
+                        }
                         
+                        // Text Input
+                        ZStack(alignment: .trailing) {
+                            TextEditor(text: $viewModel.inputText)
+                                .frame(minHeight: 40, maxHeight: 120)
+                                .padding(8)
+                                .background(Color(.systemBackground))
+                                .cornerRadius(18)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18)
+                                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                                )
+                                .padding(.vertical, 8)
+                                .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.isSending)
+                                .opacity((viewModel.hasServiceError && viewModel.errorMessage != nil) ? 0.6 : 1.0)
+                        }
                     }
                     
                     // Send Button
@@ -303,11 +344,15 @@ struct ChatView: View {
                         } else {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
-                                .foregroundColor(((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending) ? .gray : .blue)
+                                .foregroundColor(((viewModel.hasServiceError && viewModel.errorMessage != nil) || 
+                                                 (viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.selectedImage == nil) || 
+                                                 viewModel.isSending) ? .gray : .blue)
                                 .padding(8)
                         }
                     }
-                    .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending)
+                    .disabled((viewModel.hasServiceError && viewModel.errorMessage != nil) || 
+                              (viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.selectedImage == nil) || 
+                              viewModel.isSending)
                     .padding(.trailing, 8)
                     .padding(.bottom, 8)
                 }
@@ -430,21 +475,63 @@ struct MessageBubble: View {
                     .padding(.bottom, 4)
                 }
                 
-                Markdown(message.content)
-                    .markdownTheme(.gitHub)
-                    .foregroundColor(textColor)
-                    .font(.body)
-                    .padding(12)
-                    .background(backgroundColor)
-                    .cornerRadius(12)
-                    .textSelection(.enabled)
-                    .contextMenu {
-                        Button(action: {
-                            UIPasteboard.general.string = message.content
-                        }) {
-                            Label("Copy", systemImage: "doc.on.doc")
+                Group {
+                    switch message.content {
+                    case .text(let textContent):
+                        Markdown(textContent)
+                            .markdownTheme(.gitHub)
+                            .foregroundColor(textColor)
+                            .font(.body)
+                            .padding(12)
+                            .background(backgroundColor)
+                            .cornerRadius(12)
+                            .textSelection(.enabled)
+                            .contextMenu {
+                                Button(action: {
+                                    UIPasteboard.general.string = textContent
+                                }) {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
+                            }
+                    case .image(let base64Image):
+                        if let imageData = Data(base64Encoded: base64Image),
+                           let uiImage = UIImage(data: imageData) {
+                            VStack(alignment: .center) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: 240, maxHeight: 240)
+                                    .cornerRadius(12)
+                                    .padding(8)
+                                    .background(backgroundColor)
+                                    .cornerRadius(12)
+                                    .contextMenu {
+                                        Button(action: {
+                                            UIPasteboard.general.image = uiImage
+                                        }) {
+                                            Label("Copy Image", systemImage: "doc.on.doc")
+                                        }
+                                        Button(action: {
+                                            let imageSaver = ImageSaver()
+                                            imageSaver.writeToPhotoAlbum(image: uiImage)
+                                        }) {
+                                            Label("Save to Photos", systemImage: "square.and.arrow.down")
+                                        }
+                                    }
+                                
+                                Text("[Image]")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            Text("[Unable to load image]")
+                                .foregroundColor(.red)
+                                .padding(12)
+                                .background(backgroundColor)
+                                .cornerRadius(12)
                         }
                     }
+                }
                 
                 if !message.isUser {
                     Text(message.timestamp, style: .time)

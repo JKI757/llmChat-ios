@@ -106,11 +106,12 @@ class CoreDataManager {
         for message in messages {
             let storedMessage = Message(context: context)
             storedMessage.timestamp = message.timestamp
-            storedMessage.content = message.content
+            storedMessage.content = message.content.textValue
             storedMessage.role = message.role
             storedMessage.isError = message.isError
             storedMessage.conversation = conversation
         }
+        
         if !isNewConversation {
             // For existing conversations, we need to be more careful
             // First, get existing messages
@@ -121,11 +122,13 @@ class CoreDataManager {
             
             // Update existing messages and add new ones
             for message in messages {
-                let messageKey = message.content + message.role + message.timestamp.description
-                if let existingMessage = existingMessages.first(where: { $0.content == message.content && $0.role == message.role }) {
+                let contentValue = message.content.textValue
+                let messageKey = contentValue + message.role + message.timestamp.description
+                
+                if let existingMessage = existingMessages.first(where: { $0.content == contentValue && $0.role == message.role }) {
                     // Update existing message
                     existingMessage.timestamp = message.timestamp
-                    existingMessage.content = message.content
+                    existingMessage.content = contentValue
                     existingMessage.role = message.role
                     existingMessage.isError = message.isError
                     messageContentsToKeep.insert(messageKey)
@@ -133,7 +136,7 @@ class CoreDataManager {
                     // Add new message
                     let storedMessage = Message(context: context)
                     storedMessage.timestamp = message.timestamp
-                    storedMessage.content = message.content
+                    storedMessage.content = contentValue
                     storedMessage.role = message.role
                     storedMessage.isError = message.isError
                     storedMessage.conversation = conversation
@@ -190,12 +193,7 @@ class CoreDataManager {
         }
         
         return messages.map { message in
-            ChatMessage(
-                content: message.content,
-                role: message.role,
-                timestamp: message.timestamp,
-                isError: message.isError
-            )
+            ChatMessage(from: message)
         }.sorted { $0.timestamp < $1.timestamp }
     }
 }
