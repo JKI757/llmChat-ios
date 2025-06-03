@@ -184,6 +184,9 @@ class ChatViewModel: ObservableObject {
     }
     
     func sendMessage() {
+        // Reset streaming content to prevent showing previous response
+        streamingContent = ""
+        
         // Check if we have an image to send
         if let image = selectedImage {
             sendMessageWithImage(image)
@@ -291,6 +294,9 @@ class ChatViewModel: ObservableObject {
     }
     
     func sendMessageWithImage(_ image: UIImage) {
+        // Reset streaming content to prevent showing previous response
+        streamingContent = ""
+        
         // Convert image to base64
         guard let base64Image = convertImageToBase64(image) else {
             // Handle error
