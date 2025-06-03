@@ -9,6 +9,7 @@ struct ChatView: View {
     
     // Model selection is now handled by the menu
     @State private var showingSettings = false
+    @State private var showingEndpoints = false
     @State private var showingClearConfirmation = false
     @State private var showingModelSelection = false
     @State private var showingPromptLibrary = false
@@ -129,8 +130,8 @@ struct ChatView: View {
                         
                         Divider()
                         
-                        Button(action: { showingSettings = true }) {
-                            Label("Manage Endpoints", systemImage: "gear")
+                        Button(action: { showingEndpoints = true }) {
+                            Label("Manage Endpoints", systemImage: "server.rack")
                         }
                     }
                     
@@ -409,6 +410,11 @@ struct ChatView: View {
         .sheet(isPresented: $showingSettings) {
             NavigationView {
                 SettingsView(viewModel: SettingsViewModel())
+            }
+        }
+        .sheet(isPresented: $showingEndpoints) {
+            NavigationView {
+                EndpointsView(storage: storage)
             }
         }
         .sheet(isPresented: $showingPromptLibrary) {
