@@ -12,6 +12,8 @@ struct EndpointFormView: View {
     @State private var defaultModel: String
     @State private var availableModels: [String] = []
     @State private var newModelName: String = ""
+    // Track if view has appeared to prevent state reset
+    @State private var hasAppeared: Bool = false
     @State private var temperature: Double
     @State private var apiToken: String
     @State private var organizationID: String
@@ -45,11 +47,20 @@ struct EndpointFormView: View {
         _requiresAuth = State(initialValue: endpoint?.requiresAuth ?? true)
         _defaultModel = State(initialValue: endpoint?.defaultModel ?? "")
         
-        // Create a copy of the available models to ensure proper state initialization
-        var initialModels = endpoint?.availableModels ?? []
+        // Create a deep copy of the available models to ensure proper state initialization
+        var initialModels: [String] = []
+        if let endpoint = endpoint {
+            // Use the endpoint's available models directly
+            initialModels = endpoint.availableModels
+            print("Loading endpoint with \(initialModels.count) models from endpoint")
+        }
+        
+        // Make sure default model is included in available models
         if let defaultModel = endpoint?.defaultModel, !defaultModel.isEmpty, !initialModels.contains(defaultModel) {
             initialModels.append(defaultModel)
+            print("Added default model to initial models: \(defaultModel)")
         }
+        
         _availableModels = State(initialValue: initialModels)
         
         _temperature = State(initialValue: endpoint?.temperature ?? 0.7)
@@ -65,6 +76,13 @@ struct EndpointFormView: View {
         NavigationView {
             FormContent()
                 .navigationTitle(endpoint == nil ? "Add Endpoint" : "Edit Endpoint")
+                .onAppear {
+                    // Only initialize once to prevent state reset during view updates
+                    if !hasAppeared {
+                        print("View appeared, initializing with models: \(availableModels.count)")
+                        hasAppeared = true
+                    }
+                }
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Save") {
@@ -87,6 +105,13 @@ struct EndpointFormView: View {
     
     private func FormContent() -> some View {
         Form {
+            // Debug info for troubleshooting
+            if endpoint?.endpointType == .customAPI {
+                Text("Models count: \(availableModels.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+            }
             // Basic Information Section
             Section(header: Text("Basic Information")) {
                 TextField("Name", text: $name)
@@ -157,88 +182,70 @@ struct EndpointFormView: View {
                     .disabled(availableModels.isEmpty)
                     
                     // Default Prompt Picker
-                    VStack(alignment: .leading) {
-                        Text("Default Prompt")
-                            .font(.subheadline)
+                    Picker("Default Prompt", selection: $defaultPromptID) {
+                        Text("None").tag(nil as UUID?)
+                        ForEach(viewModel.savedPrompts.sorted(by: { $0.name < $1.name })) { prompt in
+                            Text(prompt.name).tag(prompt.id as UUID?)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+                    .disabled(viewModel.savedPrompts.isEmpty)
+                    
+                    if viewModel.savedPrompts.isEmpty {
+                        Text("No prompts available. Create prompts in Settings.")
+                            .font(.caption)
                             .foregroundColor(.secondary)
-                        
-                        Picker("Default Prompt", selection: $defaultPromptID) {
-                            Text("None").tag(nil as UUID?)
-                            
-                            ForEach(viewModel.savedPrompts.sorted(by: { $0.name < $1.name })) { prompt in
-                                Text(prompt.name).tag(prompt.id as UUID?)
-                            }
-                        }
-                        .pickerStyle(MenuPickerStyle())
-                        .disabled(viewModel.savedPrompts.isEmpty)
-                        
-                        if viewModel.savedPrompts.isEmpty {
-                            Text("No prompts available. Create prompts in Settings.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
                     }
                     
-                    // List of available models
-                    VStack(alignment: .leading) {
-                        Text("Available Models")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                    // Available Models Section
+                    Text("Available Models")
+                        .font(.headline)
+                        .padding(.top, 8)
+                    
+                    // Add new model field
+                    HStack {
+                        TextField("Add Model", text: $newModelName)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
                         
-                        ForEach(availableModels, id: \.self) { model in
-                            HStack {
-                                Text(model)
-                                Spacer()
-                                Button(action: {
-                                    // Don't allow removing the default model
-                                    if model != defaultModel {
-                                        // Create a new array without the removed model
-                                        var newModels = Array(availableModels)
-                                        newModels.removeAll { $0 == model }
-                                        availableModels = newModels
-                                        
-                                        print("Removed model: \(model)")
-                                        print("Remaining models: \(availableModels.count)")
-                                    }
-                                }) {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundColor(.red)
+                        Button(action: {
+                            let trimmedName = newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmedName.isEmpty && !availableModels.contains(trimmedName) {
+                                availableModels.append(trimmedName)
+                                if defaultModel.isEmpty {
+                                    defaultModel = trimmedName
                                 }
-                                .disabled(model == defaultModel)
+                                newModelName = ""
                             }
+                        }) {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(.blue)
                         }
-                        
-                        // Add new model field
+                        .disabled(newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    
+                    // List of models with remove buttons
+                    ForEach(availableModels, id: \.self) { model in
                         HStack {
-                            TextField("Add Model", text: $newModelName)
-                                .autocapitalization(.none)
-                                .disableAutocorrection(true)
-                            
-                            Button(action: {
-                                let trimmedName = newModelName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if !trimmedName.isEmpty && !availableModels.contains(trimmedName) {
-                                    // Create a new array and append to ensure state update
-                                    var newModels = Array(availableModels)
-                                    newModels.append(trimmedName)
-                                    availableModels = newModels
-                                    
-                                    print("Added model: \(trimmedName)")
-                                    print("Current models: \(availableModels.count)")
-                                    
-                                    // If this is the first model, make it the default
-                                    if defaultModel.isEmpty {
-                                        defaultModel = trimmedName
-                                    }
-                                    newModelName = ""
-                                }
-                            }) {
-                                Image(systemName: "plus.circle.fill")
+                            Text(model)
+                            if model == defaultModel {
+                                Text("(Default)")
+                                    .font(.caption)
                                     .foregroundColor(.blue)
                             }
-                            .disabled(newModelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            Spacer()
+                            Button(action: {
+                                // Don't allow removing the default model
+                                if model != defaultModel {
+                                    availableModels.removeAll { $0 == model }
+                                }
+                            }) {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundColor(.red)
+                            }
+                            .disabled(model == defaultModel)
                         }
                     }
-                    .padding(.vertical, 4)
                 } else {
                     // For OpenAI and local models, just a simple text field
                     TextField("Default Model", text: $defaultModel)
@@ -319,9 +326,9 @@ struct EndpointFormView: View {
         // Prepare available models based on endpoint type
         var modelsList: [String] = []
         if endpointType == .customAPI {
-            // For custom APIs, use the user-defined list
-            // Create a new array to ensure we're working with a clean copy
-            modelsList = Array(availableModels)
+            // For custom APIs, use the user-defined list directly
+            // Important: Don't create a new array or modify the existing one unnecessarily
+            modelsList = availableModels
             
             // Debug output to verify the models being saved
             print("Saving models for custom API: \(modelsList.count) models")
@@ -358,5 +365,20 @@ struct EndpointFormView: View {
         let token = (requiresAuth && !apiToken.isEmpty) ? apiToken : nil
         
         viewModel.saveEndpoint(endpoint, token: token)
+    }
+}
+
+// MARK: - View Extensions
+
+extension View {
+    func placeholder<Content: View>(
+        when shouldShow: Bool,
+        alignment: Alignment = .leading,
+        @ViewBuilder placeholder: () -> Content) -> some View {
+
+        ZStack(alignment: alignment) {
+            self
+            placeholder().opacity(shouldShow ? 1 : 0)
+        }
     }
 }
