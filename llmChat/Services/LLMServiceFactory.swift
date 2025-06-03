@@ -1,4 +1,5 @@
 import Foundation
+import SwiftOpenAI
 
 /// Factory for creating LLM service instances
 enum LLMServiceFactory {
@@ -41,14 +42,14 @@ enum LLMServiceFactory {
                     throw ServiceError.missingToken
                 }
                 
-                return OpenAILLMService(
+                return SwiftOpenAIService(
                     apiKey: token,
                     organizationID: endpoint.organizationID,
                     baseURLString: endpoint.url
                 )
             } else {
                 // For endpoints that don't require auth
-                return OpenAILLMService(apiKey: "", baseURLString: endpoint.url)
+                return SwiftOpenAIService(apiKey: "", baseURLString: endpoint.url)
             }
         }
     }
