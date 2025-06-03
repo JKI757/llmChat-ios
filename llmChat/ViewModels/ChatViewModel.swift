@@ -538,6 +538,7 @@ class ChatViewModel: ObservableObject {
     
     func clearConversation() {
         messages.removeAll()
+        streamingContent = ""
     }
     
     // MARK: - Private Methods
