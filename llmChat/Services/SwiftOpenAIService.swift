@@ -307,10 +307,97 @@ final class SwiftOpenAIService: LLMServiceProtocol {
         } catch {
             // Fallback to default models if API call fails
             return [
-                "gpt-4o",
-                "gpt4o-mini",
-                "o3-mini"
+                "gpt-4",
+                "gpt-4-turbo",
+                "gpt-3.5-turbo",
+                "gpt-3.5-turbo-16k"
             ]
+        }
+    }
+    
+    func sendMessages(_ messages: [ChatMessage], stream: Bool, model: String? = nil, temperature: Double? = nil) async throws -> String {
+        // Cancel any existing task
+        cancelRequest()
+        
+        // Update status
+        await MainActor.run { self.status = .streaming }
+        
+        // Prepare messages array for OpenAI
+        var apiMessages: [[String: Any]] = []
+        
+        // Add all messages
+        for chatMessage in messages {
+            apiMessages.append([
+                "role": convertToRole(chatMessage.role),
+                "content": chatMessage.content.textValue
+            ])
+        }
+        
+        // If streaming is requested, use the streaming API and collect all chunks
+        if stream {
+            var fullResponse = ""
+            let streamingResponse = try await createStreamedChat(
+                messages: apiMessages,
+                modelName: model ?? "gpt-3.5-turbo", // Use provided model or default
+                temperature: temperature ?? 0.7 // Use provided temperature or default
+            )
+            
+            for try await chunk in streamingResponse {
+                fullResponse += chunk
+            }
+            
+            // Update status when done
+            await MainActor.run { self.status = .idle }
+            return fullResponse
+        }
+        
+        // For non-streaming, make a direct API call
+        let endpoint = baseURL.appendingPathComponent("v1/chat/completions")
+        var request = URLRequest(url: endpoint)
+        
+        // Set headers
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let organizationID = organizationID {
+            request.setValue(organizationID, forHTTPHeaderField: "OpenAI-Organization")
+        }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Prepare request body
+        let requestBody: [String: Any] = [
+            "messages": apiMessages,
+            "model": model ?? "gpt-3.5-turbo", // Use provided model or default
+            "temperature": temperature ?? 0.7, // Use provided temperature or default
+            "stream": false
+        ]
+        
+        // Encode request body
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        // Make the request
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check the response
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "SwiftOpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw NSError(domain: "SwiftOpenAIService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
+        
+        // Parse the response
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let choices = json["choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let message = firstChoice["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            // Update status when done
+            await MainActor.run { self.status = .idle }
+            return content
+        } else {
+            throw NSError(domain: "SwiftOpenAIService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to parse response"])
         }
     }
 }

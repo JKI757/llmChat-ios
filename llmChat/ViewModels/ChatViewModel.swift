@@ -704,17 +704,101 @@ class ChatViewModel: ObservableObject {
     }
     
     private func saveConversationIfNeeded() {
-        do {
-            try storage.coreDataManager.saveConversation(
-                model: selectedModel,
-                systemPrompt: storage.systemPrompt,
-                userPrompt: storage.userPrompt,
-                language: "English",
-                endpointID: selectedEndpoint,
-                messages: messages
-            )
-        } catch {
-            print("Failed to save conversation: \(error)")
+        // Only proceed if we have messages to save
+        guard !messages.isEmpty else { return }
+        
+        // Generate a title for the conversation
+        generateConversationTitle { [weak self] title in
+            guard let self = self else { return }
+            
+            do {
+                try self.storage.coreDataManager.saveConversation(
+                    title: title,
+                    model: self.selectedModel,
+                    systemPrompt: self.storage.systemPrompt,
+                    userPrompt: self.storage.userPrompt,
+                    language: "English",
+                    endpointID: self.selectedEndpoint,
+                    messages: self.messages
+                )
+            } catch {
+                print("Failed to save conversation: \(error)")
+            }
+        }
+    }
+    
+    private func generateConversationTitle(completion: @escaping (String) -> Void) {
+        // Default title in case generation fails
+        var defaultTitle = "New Conversation"
+        
+        // If we have a first user message, use it as a fallback title
+        if let firstUserMessage = messages.first(where: { $0.role == "user" }) {
+            let contentText = firstUserMessage.content.textValue
+            let truncatedContent = String(contentText.prefix(30))
+            defaultTitle = truncatedContent + (truncatedContent.count < contentText.count ? "..." : "")
+        }
+        
+        // Ensure we have a service and messages to generate a title
+        guard let service = currentService, !messages.isEmpty else {
+            completion(defaultTitle)
+            return
+        }
+        
+        // Create a prompt for title generation
+        let titlePrompt = "Generate a short, concise title (5 words or less) that summarizes this conversation. Response should be ONLY the title text with no quotes or additional explanation."
+        
+        // Create a system message for title generation
+        let systemMessage = ChatMessage(content: titlePrompt, role: "system")
+        
+        // Get a subset of messages to avoid token limits (first and last few messages)
+        var messagesToSend = [systemMessage]
+        
+        // Add first few user messages
+        let userMessages = messages.filter { $0.role == "user" }
+        let firstUserMessages = Array(userMessages.prefix(2))
+        messagesToSend.append(contentsOf: firstUserMessages)
+        
+        // Add last user message if not already included
+        if let lastUserMessage = userMessages.last, !firstUserMessages.contains(where: { $0.id == lastUserMessage.id }) {
+            messagesToSend.append(lastUserMessage)
+        }
+        
+        // Add corresponding assistant responses
+        for userMsg in messagesToSend.filter({ $0.role == "user" }) {
+            if let userIndex = messages.firstIndex(where: { $0.id == userMsg.id }),
+               userIndex + 1 < messages.count,
+               messages[userIndex + 1].role == "assistant" {
+                messagesToSend.append(messages[userIndex + 1])
+            }
+        }
+        
+        // Make the API call to generate a title
+        Task {
+            do {
+                // Use the currently selected model for title generation
+                let titleResponse = try await service.sendMessages(
+                    messagesToSend, 
+                    stream: false, 
+                    model: selectedModel,
+                    temperature: 0.7
+                )
+                
+                // Process the response on the main thread
+                await MainActor.run {
+                    // Extract the title from the response
+                    let generatedTitle = titleResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    // Use the generated title if it's not empty, otherwise use the default
+                    let finalTitle = !generatedTitle.isEmpty ? generatedTitle : defaultTitle
+                    completion(finalTitle)
+                }
+            } catch {
+                // If title generation fails, use the default title
+                await MainActor.run {
+                    print("Failed to generate title: \(error)")
+                    completion(defaultTitle)
+                }
+            }
         }
     }
     

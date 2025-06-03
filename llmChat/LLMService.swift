@@ -87,10 +87,25 @@ class LLMService: NSObject, LLMServiceProtocol {
     
     // MARK: - Instance Methods
     
-    /// Cancels the current streaming request
-    func cancelStreaming() {
+    /// Cancels any ongoing request
+    func cancelRequest() {
         currentTask?.cancel()
         service?.cancelRequest()
+    }
+    
+    /// Sends a list of messages to the LLM and returns the complete response as a string
+    /// - Parameters:
+    ///   - messages: The messages to send
+    ///   - stream: Whether to stream the response (false returns complete response)
+    ///   - model: The model to use (optional, uses service default if not specified)
+    ///   - temperature: Temperature for generation (optional, uses service default if not specified)
+    /// - Returns: The complete response as a string
+    func sendMessages(_ messages: [ChatMessage], stream: Bool, model: String? = nil, temperature: Double? = nil) async throws -> String {
+        guard let service = service else {
+            throw NSError(domain: "LLMService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No service available"])
+        }
+        
+        return try await service.sendMessages(messages, stream: stream, model: model, temperature: temperature)
     }
     
     /// Starts streaming a response from the LLM
@@ -266,10 +281,6 @@ class LLMService: NSObject, LLMServiceProtocol {
         }
     }
     
-    func cancelRequest() {
-        currentTask?.cancel()
-        service?.cancelRequest()
-    }
     
     func getAvailableModels() async throws -> [String] {
         // Default implementation for legacy service

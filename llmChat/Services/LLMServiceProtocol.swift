@@ -42,8 +42,24 @@ protocol LLMServiceProtocol: ObservableObject {
     /// - Returns: Array of available model identifiers
     func getAvailableModels() async throws -> [String]
     
+    /// Sends a list of messages to the LLM and returns the complete response as a string
+    /// - Parameters:
+    ///   - messages: The messages to send
+    ///   - stream: Whether to stream the response (false returns complete response)
+    ///   - model: The model to use (optional, uses service default if not specified)
+    ///   - temperature: Temperature for generation (optional, uses service default if not specified)
+    /// - Returns: The complete response as a string
+    func sendMessages(_ messages: [ChatMessage], stream: Bool, model: String?, temperature: Double?) async throws -> String
+    
     /// The current status of the service
     var status: ServiceStatus { get }
+}
+
+// Extension to provide backward compatibility
+extension LLMServiceProtocol {
+    func sendMessages(_ messages: [ChatMessage], stream: Bool) async throws -> String {
+        return try await sendMessages(messages, stream: stream, model: nil, temperature: nil)
+    }
 }
 
 /// Represents the current status of the LLM service

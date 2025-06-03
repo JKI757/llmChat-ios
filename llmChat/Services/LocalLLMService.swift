@@ -167,6 +167,88 @@ final class LocalLLMService: LLMServiceProtocol {
         return [modelURL.lastPathComponent]
     }
     
+    func sendMessages(_ messages: [ChatMessage], stream: Bool, model: String? = nil, temperature: Double? = nil) async throws -> String {
+        // Cancel any existing task
+        cancelRequest()
+        
+        // Update status
+        await MainActor.run { self.status = .streaming }
+        
+        // Initialize LLM if needed
+        if self.llm == nil {
+            try await self.initializeLLM()
+        }
+        
+        guard let llm = self.llm else {
+            throw LLMError.modelNotInitialized
+        }
+        
+        // Build prompt from messages
+        var prompt = ""
+        
+        for message in messages {
+            switch message.role {
+            case "system":
+                prompt += "System: \(message.content.textValue)\n\n"
+            case "user":
+                prompt += "User: \(message.content.textValue)\n\n"
+            case "assistant":
+                prompt += "Assistant: \(message.content.textValue)\n\n"
+            default:
+                prompt += "\(message.content.textValue)\n\n"
+            }
+        }
+        
+        // Add final assistant prompt if the last message is not from the assistant
+        if messages.last?.role != "assistant" {
+            prompt += "Assistant: "
+        }
+        
+        // For non-streaming, collect the entire response
+        if !stream {
+            var fullResponse = ""
+            
+            // Create a local completion handler
+            let completionHandler: (String) -> Bool = { text in
+                fullResponse += text
+                return !Task.isCancelled
+            }
+            
+            // Generate text using the respond method
+            await llm.respond(to: prompt) { stream in
+                var result = ""
+                for await chunk in stream {
+                    guard !Task.isCancelled else { break }
+                    result += chunk
+                }
+                return result
+            }
+            
+            // Update status when done
+            await MainActor.run { self.status = .idle }
+            
+            return fullResponse
+        }
+        
+        // For streaming, we need to collect all chunks
+        var fullResponse = ""
+        
+        // Generate text using the respond method
+        await llm.respond(to: prompt) { stream in
+            var result = ""
+            for await chunk in stream {
+                guard !Task.isCancelled else { break }
+                fullResponse += chunk
+            }
+            return fullResponse
+        }
+        
+        // Update status when done
+        await MainActor.run { self.status = .idle }
+        
+        return fullResponse
+    }
+    
     // MARK: - Private Methods
     
     private func initializeLLM() async throws {
