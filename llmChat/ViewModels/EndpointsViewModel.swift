@@ -77,6 +77,9 @@ class EndpointsViewModel: ObservableObject {
                 storage.setDefaultEndpoint(id: endpoint.id)
             }
         }
+        // Notify that an endpoint has been updated
+        NotificationCenter.default.post(name: .endpointUpdated, object: nil, userInfo: ["endpointID": endpoint.id])
+        print("EndpointsViewModel: Posted .endpointUpdated notification for ID \(endpoint.id)")
     }
     
     func importLocalModel(from url: URL, modelName: String) async throws -> SavedEndpoint {
@@ -96,5 +99,73 @@ class EndpointsViewModel: ObservableObject {
         storage.addEndpoint(endpoint)
         
         return endpoint
+    }
+    
+    // MARK: - Model Fetching
+    
+    public func fetchOpenAIModels(baseURL: String, apiToken: String?, organizationID: String?) async throws -> [String] {
+        guard var urlComponents = URLComponents(string: baseURL) else {
+            throw NSError(domain: "EndpointsViewModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid base URL"])
+        }
+        
+        // Append /models to the base URL's path.
+        // User is expected to include /v1 in the base URL if required by the endpoint.
+        var path = urlComponents.path
+        if path.hasSuffix("/") {
+            path.removeLast() // Avoid double slashes if baseURL already ends with one
+        }
+        path += "/models"
+        urlComponents.path = path
+        
+        guard let url = urlComponents.url else {
+            throw NSError(domain: "EndpointsViewModel", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not construct models URL"])
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        
+        if let token = apiToken, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        if let orgID = organizationID, !orgID.isEmpty {
+            request.setValue(orgID, forHTTPHeaderField: "OpenAI-Organization")
+        }
+        
+        print("Fetching models from: \(url.absoluteString)")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "EndpointsViewModel", code: 3, userInfo: [NSLocalizedDescriptionKey: "Invalid response from server"])
+        }
+        
+        print("Models endpoint status code: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            let responseBody = String(data: data, encoding: .utf8) ?? "No response body"
+            print("Error response body: \(responseBody)")
+            throw NSError(domain: "EndpointsViewModel", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch models. Status: \(httpResponse.statusCode). \(responseBody)"])
+        }
+        
+        do {
+            // Define expected JSON structure
+            struct Model: Codable {
+                let id: String
+            }
+            struct ModelsResponse: Codable {
+                let data: [Model]
+            }
+            
+            let decodedResponse = try JSONDecoder().decode(ModelsResponse.self, from: data)
+            let modelIDs = decodedResponse.data.map { $0.id }.sorted()
+            print("Successfully fetched \(modelIDs.count) models.")
+            return modelIDs
+        } catch {
+            print("Failed to decode models response: \(error)")
+            let responseBody = String(data: data, encoding: .utf8) ?? "Could not read response body"
+            print("Problematic response body: \(responseBody)")
+            throw NSError(domain: "EndpointsViewModel", code: 4, userInfo: [NSLocalizedDescriptionKey: "Failed to decode models response: \(error.localizedDescription). Response: \(responseBody)"])
+        }
     }
 }

@@ -67,7 +67,7 @@ final class SwiftOpenAIService: LLMServiceProtocol {
         modelName: String,
         temperature: Double? = nil
     ) async throws -> AsyncThrowingStream<String, Error> {
-        let endpoint = baseURL.appendingPathComponent("v1/chat/completions")
+        let endpoint = baseURL.appendingPathComponent("chat/completions")
         var request = URLRequest(url: endpoint)
         
         // Set headers
@@ -352,7 +352,7 @@ final class SwiftOpenAIService: LLMServiceProtocol {
         }
         
         // For non-streaming, make a direct API call
-        let endpoint = baseURL.appendingPathComponent("v1/chat/completions")
+        let endpoint = baseURL.appendingPathComponent("chat/completions")
         var request = URLRequest(url: endpoint)
         
         // Set headers

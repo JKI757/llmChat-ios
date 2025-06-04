@@ -117,6 +117,10 @@ struct ChatView: View {
                     Section("Endpoint") {
                         ForEach(storage.savedEndpoints) { endpoint in
                             Button(action: {
+                                if viewModel.selectedEndpoint != endpoint.id {
+                                    viewModel.selectedEndpoint = endpoint.id
+                                }
+                                // Still update the persisted default for other parts of the app
                                 storage.setDefaultEndpoint(id: endpoint.id)
                             }) {
                                 HStack {

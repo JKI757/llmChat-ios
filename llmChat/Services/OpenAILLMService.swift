@@ -22,9 +22,8 @@ final class OpenAILLMService: LLMServiceProtocol {
         self.apiKey = apiKey
         self.organizationID = organizationID
         
-        // Ensure the URL ends with /v1 for OpenAI compatibility
-        let normalizedURL = baseURLString.hasSuffix("/v1") ? baseURLString : baseURLString.hasSuffix("/") ? baseURLString + "v1" : baseURLString + "/v1"
-        self.baseURL = URL(string: normalizedURL)!
+        // Use the provided baseURLString directly. The user is responsible for including /v1 if necessary.
+        self.baseURL = URL(string: baseURLString)!
     }
     
     // MARK: - Helper Methods

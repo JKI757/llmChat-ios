@@ -625,64 +625,69 @@ class ChatViewModel: ObservableObject {
     }
     
     private func updateAvailableModels(for endpoint: SavedEndpoint) {
-        // For local models, we only have the one model
+        print("ChatViewModel: Updating available models for endpoint: \(endpoint.name), type: \(endpoint.endpointType)")
+        self.isLoadingModels = true
+
         if endpoint.endpointType == .localModel {
-            availableModels = [endpoint.defaultModel]
-            selectedModel = endpoint.defaultModel
+            self.availableModels = [endpoint.defaultModel].filter { !$0.isEmpty }
+            self.selectedModel = endpoint.defaultModel
+            self.isLoadingModels = false
+            print("ChatViewModel: Local model. Available: \(self.availableModels). Selected: \(self.selectedModel)")
             return
         }
-        
-        // For custom APIs, use the stored available models
-        if endpoint.endpointType == .customAPI && !endpoint.availableModels.isEmpty {
-            availableModels = endpoint.availableModels
-            // Set selected model to default or first available
-            if endpoint.availableModels.contains(endpoint.defaultModel) {
-                selectedModel = endpoint.defaultModel
-            } else if !endpoint.availableModels.isEmpty {
-                selectedModel = endpoint.availableModels[0]
+
+        if endpoint.endpointType == .openAI || endpoint.endpointType == .customAPI {
+            if !endpoint.availableModels.isEmpty {
+                self.availableModels = endpoint.availableModels
+                if endpoint.availableModels.contains(endpoint.defaultModel) {
+                    self.selectedModel = endpoint.defaultModel
+                } else {
+                    self.selectedModel = endpoint.availableModels.first ?? ""
+                }
+                print("ChatViewModel: OpenAI/CustomAPI with stored models. Available: \(self.availableModels.count). Selected: \(self.selectedModel)")
+            } else {
+                // No models stored in endpoint.availableModels. This implies they haven't been fetched/set yet.
+                // For these types, we expect EndpointFormView to populate availableModels.
+                // So, if empty, reflect that. Don't try to fetch from service here as it would bypass user's explicit list.
+                self.availableModels = []
+                self.selectedModel = "" // Or endpoint.defaultModel, which might also be empty
+                print("ChatViewModel: OpenAI/CustomAPI but no stored models in endpoint.availableModels. Available: []. Selected: \(self.selectedModel)")
             }
+            self.isLoadingModels = false
             return
         }
-        
-        // For OpenAI and other remote endpoints, fetch available models
+
+        // Fallback for any other endpoint types that might fetch from the service directly
+        // (This block might be less relevant if all current types are covered above)
         Task {
             do {
-                isLoadingModels = true
-                let models = try await currentService?.getAvailableModels() ?? []
-                
+                print("ChatViewModel: Other endpoint type (\(endpoint.endpointType)). Attempting fetch from service.")
+                let serviceModels = try await currentService?.getAvailableModels() ?? []
                 await MainActor.run {
-                    // If we got models from the API, use those
-                    if !models.isEmpty {
-                        self.availableModels = models
-                        self.selectedModel = models.contains(endpoint.defaultModel) ? endpoint.defaultModel : models[0]
-                    } else {
-                        // If no models returned but we have stored models, use those
-                        if !endpoint.availableModels.isEmpty {
-                            self.availableModels = endpoint.availableModels
-                            self.selectedModel = endpoint.availableModels.contains(endpoint.defaultModel) ? 
-                                endpoint.defaultModel : endpoint.availableModels[0]
-                        } else {
-                            // Fallback to just the default model
-                            self.availableModels = [endpoint.defaultModel]
+                    if !serviceModels.isEmpty {
+                        self.availableModels = serviceModels
+                        if serviceModels.contains(endpoint.defaultModel) {
                             self.selectedModel = endpoint.defaultModel
+                        } else {
+                            self.selectedModel = serviceModels.first ?? ""
                         }
+                        print("ChatViewModel: Fetched from service. Available: \(self.availableModels.count). Selected: \(self.selectedModel)")
+                    } else {
+                        // Fallback if service returns no models
+                        self.availableModels = [endpoint.defaultModel].filter { !$0.isEmpty }
+                        self.selectedModel = endpoint.defaultModel
+                        print("ChatViewModel: Service returned no models. Fallback. Available: \(self.availableModels.count). Selected: \(self.selectedModel)")
                     }
                     self.isLoadingModels = false
                 }
             } catch {
                 await MainActor.run {
-                    // If API call fails, fall back to stored models or default
-                    if !endpoint.availableModels.isEmpty {
-                        self.availableModels = endpoint.availableModels
-                        self.selectedModel = endpoint.availableModels.contains(endpoint.defaultModel) ? 
-                            endpoint.defaultModel : endpoint.availableModels[0]
-                    } else {
-                        self.availableModels = [endpoint.defaultModel]
-                        self.selectedModel = endpoint.defaultModel
-                    }
+                    print("ChatViewModel: Error fetching from service: \(error.localizedDescription). Fallback to endpoint's default.")
+                    self.availableModels = [endpoint.defaultModel].filter { !$0.isEmpty } // Fallback to just the default model from endpoint
+                    self.selectedModel = endpoint.defaultModel
                     self.isLoadingModels = false
                 }
-                self.handleError(error)
+                // self.handleError(error) // Consider if error should be displayed to user
             }
         }
     }

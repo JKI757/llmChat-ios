@@ -22,6 +22,9 @@ struct EndpointFormView: View {
     @State private var isLocalFileSelected = false
     @State private var selectedFileURL: URL?
     @State private var defaultPromptID: UUID?
+    @State private var isFetchingModels: Bool = false
+    @State private var fetchModelsError: String? = nil
+    @State private var showingFetchModelsErrorAlert: Bool = false
     
     private let endpoint: SavedEndpoint?
     
@@ -99,6 +102,13 @@ struct EndpointFormView: View {
                     }
                 }
         }
+        .alert(isPresented: $showingFetchModelsErrorAlert) {
+            Alert(
+                title: Text("Error Fetching Models"),
+                message: Text(fetchModelsError ?? "An unknown error occurred."),
+                dismissButton: .default(Text("OK"))
+            )
+        }
     }
     
     // MARK: - Form Content
@@ -168,7 +178,7 @@ struct EndpointFormView: View {
             
             // Model Settings Section
             Section(header: Text("Model Settings")) {
-                if endpointType == .customAPI {
+                if endpointType == .customAPI || endpointType == .openAI {
                     // For custom APIs, allow multiple models with a default selection
                     Picker("Default Model", selection: $defaultModel) {
                         ForEach(availableModels, id: \.self) { model in
@@ -195,6 +205,38 @@ struct EndpointFormView: View {
                         Text("No prompts available. Create prompts in Settings.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                    
+                    // Fetch Models Button for OpenAI
+                    if endpointType == .openAI {
+                        HStack {
+                            Button("Fetch Models from Endpoint") {
+                                Task {
+                                    isFetchingModels = true
+                                    fetchModelsError = nil
+                                    do {
+                                        let fetchedModels = try await viewModel.fetchOpenAIModels(baseURL: url, apiToken: apiToken, organizationID: organizationID)
+                                        self.availableModels = fetchedModels
+                                        if !fetchedModels.isEmpty && (defaultModel.isEmpty || !fetchedModels.contains(defaultModel)) {
+                                            self.defaultModel = fetchedModels.first ?? ""
+                                        }
+                                        print("Successfully updated available models: \(self.availableModels.count) models.")
+                                    } catch {
+                                        let nsError = error as NSError
+                                        self.fetchModelsError = nsError.localizedDescription
+                                        self.showingFetchModelsErrorAlert = true
+                                        print("Error fetching models: \(nsError.localizedDescription)")
+                                    }
+                                    isFetchingModels = false
+                                }
+                            }
+                            .disabled(isFetchingModels || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            
+                            if isFetchingModels {
+                                ProgressView()
+                                    .padding(.leading, 5)
+                            }
+                        }
                     }
                     
                     // Available Models Section
@@ -325,27 +367,34 @@ struct EndpointFormView: View {
         
         // Prepare available models based on endpoint type
         var modelsList: [String] = []
-        if endpointType == .customAPI {
-            // For custom APIs, use the user-defined list directly
-            // Important: Don't create a new array or modify the existing one unnecessarily
-            modelsList = availableModels
+        let trimmedDefault = defaultModel.trimmingCharacters(in: .whitespaces)
+
+        if endpointType == .customAPI || endpointType == .openAI {
+            // For Custom API and OpenAI, use the state variable `availableModels` 
+            // which holds the manually entered or fetched list.
+            modelsList = self.availableModels
+            print("Saving models for \(endpointType) endpoint: \(modelsList.count) models from self.availableModels")
             
-            // Debug output to verify the models being saved
-            print("Saving models for custom API: \(modelsList.count) models")
-            for (i, model) in modelsList.enumerated() {
-                print("  Model \(i): \(model)")
-            }
-            
-            // Ensure the default model is in the list
-            let trimmedDefault = defaultModel.trimmingCharacters(in: .whitespaces)
+            // Ensure the default model (if set) is in the list. 
+            // This is important if availableModels was empty and defaultModel was typed manually,
+            // or if defaultModel was somehow not included in a fetched list it should have been.
             if !trimmedDefault.isEmpty && !modelsList.contains(trimmedDefault) {
+                // Check if it's a non-empty default model that's missing
                 modelsList.append(trimmedDefault)
-                print("  Added default model: \(trimmedDefault)")
+                print("  Added default model to modelsList: \(trimmedDefault)")
             }
-        } else if !defaultModel.trimmingCharacters(in: .whitespaces).isEmpty {
-            // For other types, just include the default model
-            modelsList = [defaultModel.trimmingCharacters(in: .whitespaces)]
+            // If modelsList is still empty but there's a default model, ensure it's the only one.
+            if modelsList.isEmpty && !trimmedDefault.isEmpty {
+                modelsList = [trimmedDefault]
+            }
+
+        } else if !trimmedDefault.isEmpty {
+            // For other types (e.g., .localModel), just include the default model if it's set.
+            modelsList = [trimmedDefault]
+            print("Saving model for \(endpointType) endpoint: [\(trimmedDefault)]")
         }
+        // If modelsList is still empty at this point (e.g. new OpenAI endpoint, no fetch, no default entered), it will be saved as empty.
+        print("Final modelsList to be saved for \(name): \(modelsList)")
         
         let endpoint = SavedEndpoint(
             id: endpoint?.id ?? UUID(),
