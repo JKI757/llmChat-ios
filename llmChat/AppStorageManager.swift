@@ -553,7 +553,7 @@ class AppStorageManager: ObservableObject, AppStorageManagerProtocol {
         }
         
         // Construct the models URL
-        let modelsURL = baseURL + "/v1/models"
+        let modelsURL = baseURL + "/models"
         print("Fetching models from: \(modelsURL)")
         
         // Create URL request

@@ -458,7 +458,7 @@ class ChatViewModel: ObservableObject {
                 }
                 
                 // Create the request
-                var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+                var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
                 request.httpMethod = "POST"
                 request.addValue("application/json", forHTTPHeaderField: "Content-Type")
                 
